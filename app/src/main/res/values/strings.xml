@@ -1,0 +1,4 @@
+<resources>
+    <string name="power_menu_service_label">R1CORD power menu</string>
+    <string name="power_menu_service_description">Lets the Power off button in R1CORD settings open Android\'s power menu. R1CORD reads no screen content and takes no other action.</string>
+</resources>

@@ -1,0 +1,27 @@
+# Build outputs
+/build/
+app/build/
+dist/
+.gradle/
+.kotlin/
+
+# Local toolchain and signing — never commit these
+local.properties
+*.jks
+*.keystore
+gradle.properties.local
+
+# Python
+server/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# Downloaded tools
+server/tools/
+platform-tools/
+
+# Logs and scratch
+*.log
+logs/

@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — r1cord-server{% endblock %}
+{% block body %}
+<h1>Dashboard</h1>
+
+<section class="card">
+  <h2>Health</h2>
+  <dl class="grid">
+    <dt>claude</dt><dd>{{ health.claude }}</dd>
+    <dt>codex</dt><dd>{{ health.codex }}</dd>
+    <dt>grok</dt><dd>{{ health.grok }}</dd>
+    <dt>adb</dt><dd>{{ health.adb }}</dd>
+    <dt>GPU (ctranslate2)</dt><dd>{{ health.gpu }}</dd>
+    <dt>MD DOCS bridge</dt><dd>{{ health.mddocs }} (port {{ health.mddocs_port }})</dd>
+    <dt>Datastore</dt><dd>{{ health.datastore_space }}</dd>
+    <dt>WebDAV folder</dt><dd>{{ health.webdav_exists }}</dd>
+    <dt>Last job</dt><dd>{{ health.last_job }}</dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>USB mode</h2>
+  <p>
+    {% if usb.enabled %}<strong class="ok">On</strong>{% else %}<strong class="warn">Off</strong>{% endif %}
+    — adb: <span class="path">{{ usb.adb }}</span>
+    <form method="post" action="/admin/usb/toggle" class="inline">
+      <button type="submit">{% if usb.enabled %}Turn off{% else %}Turn on{% endif %}</button>
+    </form>
+  </p>
+  {% if usb.connected %}
+  <ul>
+    {% for serial, model, adopted in usb.connected %}
+    <li><span class="path">{{ serial }}</span> {{ model }} — {% if adopted %}adopted{% else %}<a href="/admin/devices">not adopted</a>{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted">No device connected.</p>
+  {% endif %}
+  {% if usb.syncing %}<p>Pulling <span class="path">{{ usb.syncing }}</span>…</p>{% endif %}
+  {% if usb.last_error %}<p class="warn">{{ usb.last_error }}</p>{% endif %}
+  <p class="muted">Auto action: {{ config.usb_auto_action }} · run mode: {{ config.run_mode }}{% if config.run_mode == "plug" %} (exits after {{ config.idle_exit_min }} idle min){% endif %}. <a href="/admin/devices">Devices</a></p>
+</section>
+
+<section class="card">
+  <h2>Running</h2>
+  {% if running %}
+  <p>
+    <a href="/admin/jobs/{{ running.job.job_id }}">{{ running.job.title }}</a>
+    — {{ running.job.status }}
+    — {{ running.elapsed }}
+  </p>
+  <p class="muted">{{ running.last_log }}</p>
+  {% else %}
+  <p class="muted">Idle.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Queue</h2>
+  {% if queue %}
+  <table>
+    <thead><tr><th>Job</th><th>Recording</th><th>Title</th><th>Writer</th></tr></thead>
+    <tbody>
+    {% for j in queue %}
+      <tr>
+        <td><a href="/admin/jobs/{{ j.job_id }}">{{ j.job_id }}</a></td>
+        <td>{{ j.recording_id }}</td>
+        <td>{{ j.title }}</td>
+        <td>{{ j.writer }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Empty.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Recent jobs</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Recording</th><th>Title</th><th>Status</th><th>Writer</th><th>Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for j in recent %}
+      <tr>
+        <td><a href="/admin/jobs/{{ j.job_id }}">{{ j.recording_id }}</a></td>
+        <td>{{ j.title }}</td>
+        <td>{{ j.status }}</td>
+        <td>{{ j.writer }}</td>
+        <td>{{ j.updated_at }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Pairing</h2>
+  <form method="post" action="/admin/pair">
+    <button type="submit">Generate pairing code</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Tokens</h2>
+  <table>
+    <thead><tr><th>Id</th><th>Label</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr></thead>
+    <tbody>
+    {% for t in tokens %}
+      <tr>
+        <td>{{ t.id }}</td>
+        <td>{{ t.label }}</td>
+        <td>{{ t.created_at }}</td>
+        <td>{{ t.last_used_at or "—" }}</td>
+        <td>{{ "yes" if t.revoked else "no" }}</td>
+        <td>
+          {% if not t.revoked %}
+          <form method="post" action="/admin/tokens/{{ t.id }}/revoke">
+            <button type="submit">Revoke</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

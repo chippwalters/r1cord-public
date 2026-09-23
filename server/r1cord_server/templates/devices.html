@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Devices — r1cord-server{% endblock %}
+{% block body %}
+<h1>Devices</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h2>USB mode</h2>
+  <p>
+    {% if usb.enabled %}<strong class="ok">On</strong>{% else %}<strong class="warn">Off</strong> — nothing is polled or pulled.{% endif %}
+    — adb: <span class="path">{{ usb.adb }}</span>
+    <form method="post" action="/admin/usb/toggle" class="inline">
+      <button type="submit">{% if usb.enabled %}Turn off{% else %}Turn on{% endif %}</button>
+    </form>
+    <form method="post" action="/admin/usb/poll" class="inline">
+      <button type="submit">Sync now</button>
+    </form>
+  </p>
+  {% if usb.syncing %}<p>Pulling <span class="path">{{ usb.syncing }}</span>…</p>{% endif %}
+  {% if usb.last_error %}<p class="warn">{{ usb.last_error }}</p>{% endif %}
+  <p class="muted">Auto action for new recordings: <strong>{{ config.usb_auto_action }}</strong> (change in <a href="/admin/config">Config</a>). Turn USB mode off before any mtkclient / fastboot work.</p>
+</section>
+
+<section class="card">
+  <h2>Connected, not adopted</h2>
+  {% if unknown %}
+  <table>
+    <tr><th>Serial</th><th>Model</th><th></th></tr>
+    {% for d in unknown %}
+    <tr>
+      <td class="path">{{ d.serial }}</td>
+      <td>{{ d.model or "—" }}</td>
+      <td>
+        <form method="post" action="/admin/devices/{{ d.serial }}/adopt" class="inline">
+          <button type="submit">Adopt</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted">Nothing is pulled from a device until it is adopted.</p>
+  {% else %}
+  <p class="muted">None.</p>
+  {% endif %}
+</section>
+
+{% for d in adopted %}
+<section class="card">
+  <h2>{{ d.info.model or "device" }} <span class="path">{{ d.info.serial }}</span></h2>
+  <p>
+    {% if d.connected %}<span class="ok">connected</span>{% else %}<span class="muted">not connected</span>{% endif %}
+    · adopted {{ d.info.adopted_at }}
+    · last seen {{ d.info.last_seen_at or "never" }}
+    · last sync {{ d.info.last_sync_at or "never" }}
+    <form method="post" action="/admin/devices/{{ d.info.serial }}/forget" class="inline">
+      <button type="submit">Forget</button>
+    </form>
+  </p>
+  {% if d.info.last_error %}<p class="warn">{{ d.info.last_error }}</p>{% endif %}
+  {% if d.recordings %}
+  <table>
+    <tr>
+      <th>Recording</th><th>Title</th><th>On device</th><th>Pulled</th><th>Job</th><th>Flags</th><th>Action</th>
+    </tr>
+    {% for r in d.recordings %}
+    <tr>
+      <td class="path">{{ r.recording_id }}</td>
+      <td>{{ r.title or "—" }}</td>
+      <td>{{ r.device_status }}</td>
+      <td>{% if r.pulled_at %}{{ r.file_count }} files · {{ (r.bytes / 1048576) | round(1) }} MB{% else %}<span class="muted">not yet</span>{% endif %}</td>
+      <td>
+        {% if r.latest_job %}
+        <a href="/admin/jobs/{{ r.latest_job.job_id }}">{{ r.latest_job.status }}</a>
+        {% if r.latest_job.status == "complete" and r.latest_job.publish and r.latest_job.webdav_url %}
+        · <a href="{{ r.latest_job.webdav_url }}">page</a>
+        {% endif %}
+        {% else %}<span class="muted">none</span>{% endif %}
+      </td>
+      <td>
+        {% if r.changed_since_job %}<span class="warn">changed since job</span>{% endif %}
+        {% if r.flag == "audio_mismatch" %}<span class="error">audio differs from inbox</span>{% endif %}
+        {% if r.flag == "pull_failed" %}<span class="error">pull failed</span>{% endif %}
+        {% if r.flag == "process_failed" %}<span class="error">could not queue</span>{% endif %}
+        {% if r.device_status == "INTERRUPTED" %}<span class="muted">interrupted — archive only</span>{% endif %}
+      </td>
+      <td>
+        {% if r.pulled_at and r.device_status == "SAVED" and not (r.latest_job and r.latest_job.status not in ["complete", "error"]) %}
+        <form method="post" action="/admin/devices/{{ d.info.serial }}/recordings/{{ r.recording_id }}/process" class="inline">
+          <select name="action">
+            {% for a in actions %}<option value="{{ a }}">{{ a }}</option>{% endfor %}
+          </select>
+          <button type="submit">{% if r.latest_job %}Re-process{% else %}Process{% endif %}</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="muted">No recordings seen yet.</p>
+  {% endif %}
+</section>
+{% else %}
+<section class="card">
+  <p class="muted">No adopted devices. Plug the R1 in with USB debugging on; it appears above.</p>
+</section>
+{% endfor %}
+{% endblock %}

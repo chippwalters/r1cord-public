@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}Pairing code — r1cord-server{% endblock %}
+{% block body %}
+<h1>Pairing code</h1>
+<section class="card">
+  <p>Enter this code on the R1. It is single-use and expires in {{ ttl_s }} seconds.</p>
+  <p class="code">{{ code }}</p>
+  <p class="muted">Server name: {{ server_name }}</p>
+  <p><a href="/admin">Back to dashboard</a></p>
+</section>
+{% endblock %}

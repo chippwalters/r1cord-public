@@ -1,0 +1,12 @@
+<resources>
+    <style name="Theme.R1cord" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorAccent">#FE4023</item>
+        <item name="android:windowBackground">#0E1013</item>
+        <item name="android:windowSplashScreenBackground">#0E1013</item>
+        <item name="android:navigationBarColor">#0E1013</item>
+        <item name="android:statusBarColor">#0E1013</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

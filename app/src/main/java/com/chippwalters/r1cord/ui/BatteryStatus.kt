@@ -1,0 +1,50 @@
+package com.chippwalters.r1cord.ui
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+
+@Composable
+fun BatteryStatus(percent: Int, isCharging: Boolean) {
+    val level = percent.coerceIn(0, 100)
+    val fill = if (level <= 15) Orange else if (isCharging) Teal else White
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.semantics(mergeDescendants = true) {
+            contentDescription = "Battery $level percent" + if (isCharging) ", charging" else ", not charging"
+        },
+    ) {
+        if (isCharging) Icon(Icons.Default.Bolt, null, Modifier.size(20.dp), tint = Teal)
+        Text("$level%", fontFamily = RecorderLabelFace, fontSize = 17.sp, lineHeight = 21.sp, color = White)
+        Canvas(Modifier.size(width = 32.dp, height = 17.dp)) {
+            val stroke = 1.4.dp.toPx()
+            val terminalWidth = 2.5.dp.toPx()
+            val bodyWidth = size.width - terminalWidth - stroke
+            drawRoundRect(White, topLeft = Offset(stroke / 2, stroke / 2),
+                size = Size(bodyWidth, size.height - stroke), cornerRadius = CornerRadius(1.8.dp.toPx()),
+                style = Stroke(stroke))
+            drawRect(White, topLeft = Offset(bodyWidth + stroke, size.height * 0.3f),
+                size = Size(terminalWidth, size.height * 0.4f))
+            val inset = 3.dp.toPx()
+            if (level > 0) drawRect(fill, topLeft = Offset(inset, inset),
+                size = Size((bodyWidth - inset * 2) * level / 100f, size.height - inset * 2))
+        }
+    }
+}

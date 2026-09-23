@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job_id }} — r1cord-server{% endblock %}
+{% block body %}
+{% if not job %}
+<h1>Unknown job</h1>
+<p class="muted">{{ job_id }}</p>
+{% else %}
+<h1>{{ job.title }}</h1>
+<p class="muted">{{ job.job_id }} · {{ job.recording_id }} · {{ job.status }}</p>
+
+{% if notice %}<p class="error">{{ notice }}</p>{% endif %}
+{% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
+
+<section class="card">
+  <h2>Result</h2>
+  <dl class="grid">
+    <dt>status</dt><dd>{{ result.status }}</dd>
+    <dt>error</dt><dd>{{ result.error or "—" }}</dd>
+    <dt>writer</dt><dd>{{ result.writer }}</dd>
+    <dt>summarize</dt><dd>{{ result.summarize }}</dd>
+    <dt>publish</dt><dd>{{ result.publish }}</dd>
+    <dt>style</dt><dd>{{ result.summaryStyle }}</dd>
+    <dt>created</dt><dd>{{ result.createdAt }}</dd>
+    <dt>updated</dt><dd>{{ result.updatedAt }}</dd>
+    <dt>publish folder</dt><dd class="path">{{ result.publishFolder or "—" }}</dd>
+    <dt>URL</dt>
+    <dd>
+      {% if result.webdavUrl %}
+      <a href="{{ result.webdavUrl }}">{{ result.webdavUrl }}</a>
+      {% else %}—{% endif %}
+    </dd>
+    <dt>timings (ms)</dt>
+    <dd>asr {{ result.timingsMs.asr }} · writer {{ result.timingsMs.writer }} · publish {{ result.timingsMs.publish }}</dd>
+    <dt>asr</dt>
+    <dd>
+      {% if result.asr %}
+      {{ result.asr.model }} / {{ result.asr.device }} / {{ result.asr.language }}
+      {% else %}—{% endif %}
+    </dd>
+  </dl>
+</section>
+
+<section class="card">
+  <h2>Outbox files</h2>
+  <ul>
+    {% for name in files %}
+    <li><a href="/admin/files/{{ job.recording_id }}/{{ name }}">{{ name }}</a></li>
+    {% else %}
+    <li class="muted">None yet.</li>
+    {% endfor %}
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Retry</h2>
+  <form method="post" action="/admin/jobs/{{ job.job_id }}/retry-writer">
+    <label>Writer
+      <select name="writer">
+        <option value="">keep {{ job.writer }}</option>
+        <option value="claude_code">claude_code</option>
+        <option value="codex">codex</option>
+        <option value="grok_build">grok_build</option>
+      </select>
+    </label>
+    <button type="submit">Retry writer</button>
+  </form>
+  <form method="post" action="/admin/jobs/{{ job.job_id }}/retry-publish">
+    <button type="submit">Retry publish</button>
+  </form>
+</section>
+
+<section class="card">
+  <h2>Log</h2>
+  <pre class="log">{% for line in log_lines %}{{ line }}
+{% endfor %}</pre>
+</section>
+{% endif %}
+{% endblock %}
