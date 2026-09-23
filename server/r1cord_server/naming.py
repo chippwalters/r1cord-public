@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from .config import Config
+from .config import PAGE_KINDS, Config
 
 _NON_SLUG = re.compile(r"[^a-z0-9]+")
 _SLUG_MAX = 48
@@ -61,8 +62,8 @@ def publish_folder(
         n += 1
 
 
-def webdav_url(config: Config, folder: Path) -> str:
-    """`<public_url_base>/<YYYY>/<MM>/<folder>/summary.html` with encoded segments.
+def webdav_url(config: Config, folder: Path, page: str) -> str:
+    """`<public_url_base>/<YYYY>/<MM>/<folder>/<page>` with encoded segments, e.g. page `summary.html`.
 
     Lexical only: `Path.resolve()` raises WinError 1005 on the rclone WebDAV mount.
     Root matching is case-insensitive and boundary-aware (a sibling like `wd2`
@@ -77,7 +78,41 @@ def webdav_url(config: Config, folder: Path) -> str:
         rel = Path(*folder.parts[-3:])
     parts = [quote(p, safe="-_.") for p in rel.parts]
     base = config.public_url_base.rstrip("/")
-    return f"{base}/{'/'.join(parts)}/summary.html"
+    return f"{base}/{'/'.join(parts)}/{quote(page, safe="-_.")}"
+
+
+def published_files(config: Config, folder: Path | str | None) -> dict[str, str]:
+    """`{"<kind>.html" | "<kind>.md": url}` for each page file in a recording's publish folder.
+
+    One directory listing, no resolve(): the folder usually sits on the rclone WebDAV mount.
+    A missing or unreadable folder has no pages.
+    """
+    if not folder:
+        return {}
+    try:
+        names = {name.lower() for name in os.listdir(folder)}
+    except OSError:
+        return {}
+    return {
+        name: webdav_url(config, Path(folder), name)
+        for kind in PAGE_KINDS
+        for name in (f"{kind}.html", f"{kind}.md")
+        if name in names
+    }
+
+
+def published_pages(config: Config, folder: Path | str | None) -> list[dict[str, str]]:
+    """`[{"kind", "url"}]` for every `<kind>.html` in a recording's publish folder, in page order."""
+    files = published_files(config, folder)
+    return [{"kind": kind, "url": files[f"{kind}.html"]} for kind in PAGE_KINDS if f"{kind}.html" in files]
+
+
+def in_publish_root(config: Config, folder: Path | str) -> bool:
+    """True when `folder` sits strictly inside `webdav_folder`: never the root itself, never outside it.
+    Lexical (resolve() raises WinError 1005 on the rclone WebDAV mount)."""
+    root = [_norm(p) for p in Path(os.path.abspath(config.webdav_folder)).parts]
+    parts = [_norm(p) for p in Path(os.path.abspath(folder)).parts]
+    return len(parts) > len(root) and parts[: len(root)] == root
 
 
 def _norm(path: str | Path) -> str:

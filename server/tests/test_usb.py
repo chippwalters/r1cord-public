@@ -158,7 +158,7 @@ def test_parse_listing_only_one_level_deep_and_safe_names() -> None:
 
 def test_first_sync_pulls_everything_and_queues_configured_action(setup) -> None:
     tree, fake, store, watcher, holder = setup
-    holder["cfg"] = replace(holder["cfg"], usb_auto_action="summarize")
+    holder["cfg"] = replace(holder["cfg"], usb_auto_action="review")
     _device_recording(tree, "rec-1", photos={"photo-p1.jpg": b"jpeg"})
 
     watcher.poll_once()
@@ -169,7 +169,7 @@ def test_first_sync_pulls_everything_and_queues_configured_action(setup) -> None
     assert not (inbox / ".upload" / "audio.m4a.partial").exists()
     job = store.latest_for("rec-1")
     assert job is not None and job.status == "queued"
-    assert job.summarize is True and job.publish is False
+    assert job.reviews == ("summary",) and job.publish is False
     assert job.title == "Site visit"
     rows = store.device_recordings(SERIAL)
     assert rows[0].auto_job_id == job.job_id and rows[0].pulled_at
@@ -193,7 +193,7 @@ def test_archive_action_pulls_without_job(setup) -> None:
     assert (store.inbox_dir("rec-a") / "audio.m4a").is_file()
     assert store.latest_for("rec-a") is None
     rec = store.process_inbox("rec-a", action="transcribe")
-    assert rec.summarize is False and rec.publish is False and rec.status == "queued"
+    assert rec.reviews == () and rec.publish is False and rec.status == "queued"
 
 
 def test_new_photo_after_job_is_pulled_and_flagged(setup) -> None:
@@ -389,7 +389,7 @@ def test_paused_recording_is_skipped(setup) -> None:
 
 def test_interrupted_recording_is_archive_only(setup) -> None:
     tree, fake, store, watcher, holder = setup
-    holder["cfg"] = replace(holder["cfg"], usb_auto_action="summarize")
+    holder["cfg"] = replace(holder["cfg"], usb_auto_action="review")
     _device_recording(tree, "rec-int", status="INTERRUPTED")
 
     watcher.poll_once()
@@ -417,7 +417,7 @@ def test_unreadable_metadata_flags_pull_failed_and_recovers(setup) -> None:
     assert store.latest_for("rec-bad") is None
 
     # The device rewrites valid metadata; the next pass clears the flag and queues normally.
-    holder["cfg"] = replace(holder["cfg"], usb_auto_action="summarize")
+    holder["cfg"] = replace(holder["cfg"], usb_auto_action="review")
     (folder / "metadata.json").write_text(
         json.dumps({"id": "rec-bad", "title": "Recovered", "createdAt": 1_758_400_000_000, "status": "SAVED"}),
         encoding="utf-8",
@@ -433,7 +433,7 @@ def test_unreadable_metadata_flags_pull_failed_and_recovers(setup) -> None:
 
 def test_pull_error_aborts_sync_without_half_files_and_retries_next_pass(setup) -> None:
     tree, fake, store, watcher, holder = setup
-    holder["cfg"] = replace(holder["cfg"], usb_auto_action="summarize")
+    holder["cfg"] = replace(holder["cfg"], usb_auto_action="review")
     _device_recording(tree, "rec-detach")
     fake.fail_pulls.add("rec-detach/audio.m4a")
 

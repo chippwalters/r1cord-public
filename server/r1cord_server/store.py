@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .config import Config
+from .config import REVIEW_KINDS, Config, canonical_reviews
 from . import naming
 
 SCHEMA_VERSION = 1
@@ -39,9 +39,8 @@ AUDIO_NAMES = frozenset({"audio.m4a", "audio.wav"})
 FILE_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 PHOTO_RE = re.compile(r"^photo-[A-Za-z0-9._-]+\.jpg$")
 SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
-STYLES = frozenset({"notes", "minutes", "article"})
 WRITERS = frozenset({"claude_code", "codex", "grok_build", "none"})
-USB_ACTIONS = frozenset({"transcribe", "summarize", "publish"})
+PROCESS_ACTIONS = frozenset({"transcribe", "review", "publish"})
 
 def _check_recording_id(recording_id: str) -> None:
     """Recording ids become folder names under inbox/ and outbox/.
@@ -80,11 +79,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     status TEXT,
     error TEXT,
     title TEXT,
-    summarize INTEGER,
+    reviews TEXT NOT NULL DEFAULT '',
     publish INTEGER,
-    summary_style TEXT,
     writer TEXT,
-    webdav_url TEXT,
     publish_folder TEXT,
     skip_asr INTEGER DEFAULT 0,
     only_publish INTEGER DEFAULT 0,
@@ -213,9 +210,8 @@ class JobRequest:
     recording_id: str
     created_at_ms: int
     title: str
-    summarize: bool
+    reviews: tuple[str, ...]
     publish: bool
-    summary_style: str
     files: tuple[FileSpec, ...]
     schema_version: int = SCHEMA_VERSION
     writer: str | None = None
@@ -228,10 +224,10 @@ class JobRecord:
     status: str
     error: str | None
     title: str
-    summarize: bool
+    reviews: tuple[str, ...]
     publish: bool
-    summary_style: str
     writer: str
+    # Predicted URL for older clients: summary.html when a summary is requested, else transcript.html.
     webdav_url: str | None
     publish_folder: str | None
     skip_asr: bool
@@ -261,6 +257,7 @@ class RecordingSummary:
     job_id: str
     status: str
     webdav_url: str | None
+    pages: list[dict[str, str]]
     updated_at: str
 
 
@@ -290,6 +287,11 @@ class DeviceRecording:
     file_count: int
     bytes: int
     latest_job: JobRecord | None
+
+
+def _split_reviews(value: Any) -> tuple[str, ...]:
+    """The `reviews` column: canonical kinds joined by commas; '' for transcript only."""
+    return tuple(k for k in str(value or "").split(",") if k in REVIEW_KINDS)
 
 
 def utcnow_iso() -> str:
@@ -338,7 +340,23 @@ class JobStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Bring a database from before AI reviews up to date: `summarize` becomes `reviews`,
+        and the summary style and the stored URL (now derived from the publish folder) go."""
+        columns = {str(r["name"]) for r in self._conn.execute("PRAGMA table_info(jobs)")}
+        if "reviews" not in columns:
+            self._conn.execute("ALTER TABLE jobs ADD COLUMN reviews TEXT NOT NULL DEFAULT ''")
+            if "summarize" in columns:
+                self._conn.execute(
+                    "UPDATE jobs SET reviews = CASE WHEN summarize = 1 THEN 'summary' ELSE '' END"
+                )
+            _log.info("store: migrated jobs to AI reviews")
+        for column in ("summarize", "summary_style", "webdav_url"):
+            if column in columns:
+                self._conn.execute(f"ALTER TABLE jobs DROP COLUMN {column}")
 
     # --- paths -------------------------------------------------------------
 
@@ -449,6 +467,7 @@ class JobStore:
 
     def create_job(self, job: JobRequest, metadata: dict[str, Any]) -> JobRecord:
         self._validate_request(job)
+        reviews = canonical_reviews(job.reviews)
         with self._lock:
             active = self.active_job_for(job.recording_id)
             if active is not None:
@@ -464,7 +483,6 @@ class JobStore:
             existing = self.latest_for(job.recording_id)
             if existing and existing.publish_folder:
                 publish_path = Path(existing.publish_folder)
-                url = existing.webdav_url or naming.webdav_url(self.config, publish_path)
             else:
                 occupied = self._occupied_folders()
                 publish_path = naming.publish_folder(
@@ -474,7 +492,6 @@ class JobStore:
                     job.recording_id,
                     occupied=occupied,
                 )
-                url = naming.webdav_url(self.config, publish_path)
 
             now = utcnow_iso()
             job_id = str(uuid4())
@@ -485,19 +502,17 @@ class JobStore:
                 encoding="utf-8",
             )
             self._conn.execute(
-                "INSERT INTO jobs (job_id, recording_id, status, error, title, summarize, "
-                "publish, summary_style, writer, webdav_url, publish_folder, skip_asr, "
+                "INSERT INTO jobs (job_id, recording_id, status, error, title, reviews, "
+                "publish, writer, publish_folder, skip_asr, "
                 "only_publish, created_at, updated_at, finished_at, asr_json, timings_json) "
-                "VALUES (?, ?, 'uploading', NULL, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL, NULL, ?)",
+                "VALUES (?, ?, 'uploading', NULL, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL, NULL, ?)",
                 (
                     job_id,
                     job.recording_id,
                     title,
-                    int(job.summarize),
+                    ",".join(reviews),
                     int(job.publish),
-                    job.summary_style,
                     writer,
-                    url,
                     str(publish_path),
                     created_iso,
                     now,
@@ -627,23 +642,28 @@ class JobStore:
         with self._lock:
             rows = self._conn.execute(
                 """
-                SELECT recording_id, job_id, status, webdav_url, publish, updated_at FROM (
+                SELECT recording_id, job_id, status, reviews, publish, publish_folder, updated_at FROM (
                     SELECT j.*, ROW_NUMBER() OVER (PARTITION BY recording_id ORDER BY rowid DESC) AS rn
                     FROM jobs j
                 ) WHERE rn = 1
                 ORDER BY updated_at DESC
                 """
             ).fetchall()
-        return [
-            RecordingSummary(
-                recording_id=str(r["recording_id"]),
-                job_id=str(r["job_id"]),
-                status=str(r["status"]),
-                webdav_url=str(r["webdav_url"]) if r["webdav_url"] and int(r["publish"]) else None,
-                updated_at=str(r["updated_at"]),
+        summaries: list[RecordingSummary] = []
+        for r in rows:
+            folder = str(r["publish_folder"]) if r["publish_folder"] else None
+            url = self._predicted_url(folder, _split_reviews(r["reviews"]))
+            summaries.append(
+                RecordingSummary(
+                    recording_id=str(r["recording_id"]),
+                    job_id=str(r["job_id"]),
+                    status=str(r["status"]),
+                    webdav_url=url if int(r["publish"]) else None,
+                    pages=naming.published_pages(self.config, folder),
+                    updated_at=str(r["updated_at"]),
+                )
             )
-            for r in rows
-        ]
+        return summaries
 
     def recent_jobs(self, limit: int = 50) -> list[JobRecord]:
         with self._lock:
@@ -687,7 +707,6 @@ class JobStore:
                 "skip_asr": "skip_asr",
                 "only_publish": "only_publish",
                 "writer": "writer",
-                "webdav_url": "webdav_url",
                 "publish_folder": "publish_folder",
             }
             for key, column in mapping.items():
@@ -696,6 +715,8 @@ class JobStore:
                     if key in ("skip_asr", "only_publish"):
                         value = int(bool(value))
                     updates[column] = value
+            if "reviews" in fields:
+                updates["reviews"] = ",".join(canonical_reviews(fields["reviews"]))
             if "asr" in fields:
                 updates["asr_json"] = json.dumps(fields["asr"]) if fields["asr"] is not None else None
             if "timings" in fields:
@@ -766,18 +787,38 @@ class JobStore:
             "status": rec.status,
             "error": rec.error,
             "title": rec.title,
-            "summarize": rec.summarize,
+            "reviews": list(rec.reviews),
             "publish": rec.publish,
-            "summaryStyle": rec.summary_style,
             "writer": rec.writer,
             "asr": asr_out,
             "webdavUrl": rec.webdav_url if rec.publish else None,
+            "pages": self.pages(rec),
             "publishFolder": rec.publish_folder,
             "timingsMs": rec.timings or {"asr": 0, "writer": 0, "publish": 0},
             "createdAt": rec.created_at,
             "updatedAt": rec.updated_at,
             "history": history,
         }
+
+    def previous_review_job(self, recording_id: str, kind: str, job_id: str) -> str | None:
+        """The newest other job of the recording that got as far as writing `kind`: the job an
+        existing `<kind>.md` most likely came from. Names the archived copy on a rewrite."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT job_id, reviews FROM jobs WHERE recording_id = ? AND job_id != ? "
+                "AND status IN ('written', 'publishing', 'published', 'complete', 'error') "
+                "ORDER BY rowid DESC",
+                (recording_id, job_id),
+            ).fetchall()
+        for row in rows:
+            if kind in _split_reviews(row["reviews"]):
+                return str(row["job_id"])
+        return None
+
+    def pages(self, rec: JobRecord) -> list[dict[str, str]]:
+        """Pages actually published for the job's recording (every job of a recording shares
+        one publish folder)."""
+        return naming.published_pages(self.config, rec.publish_folder)
 
     # --- upload ------------------------------------------------------------
 
@@ -918,9 +959,8 @@ class JobStore:
                 "recordingId": rec.recording_id,
                 "createdAt": rec.created_at,
                 "title": rec.title,
-                "summarize": rec.summarize,
+                "reviews": list(rec.reviews),
                 "publish": rec.publish,
-                "summaryStyle": rec.summary_style,
                 "files": [
                     {"name": f.name, "size": f.size, "sha256": f.sha256} for f in files
                 ],
@@ -934,15 +974,30 @@ class JobStore:
 
     # --- retries -----------------------------------------------------------
 
-    def retry_writer(self, job_id: str, writer: str | None) -> JobRecord:
+    def retry_writer(
+        self,
+        job_id: str,
+        writer: str | None,
+        reviews: tuple[str, ...] | list[str] | None = None,
+    ) -> JobRecord:
+        """Re-run the writer on the existing transcript. `reviews` defaults to the job's own;
+        an explicit list must name at least one known kind (ValueError otherwise)."""
         rec = self.job(job_id)
         if rec is None:
             raise UnknownJob(job_id)
+        if reviews is not None:
+            chosen_reviews = canonical_reviews(reviews)
+            if not chosen_reviews:
+                raise ValueError("choose at least one review")
+        else:
+            chosen_reviews = rec.reviews
         if rec.status not in RETRY_WRITER_STATUSES:
             raise RetryNotAllowed(f"cannot retry writer from status {rec.status}")
         transcript = self.outbox_dir(rec.recording_id) / "transcript.txt"
         if not transcript.is_file():
             raise RetryNotAllowed("transcript.txt is missing")
+        if not chosen_reviews:
+            raise RetryNotAllowed("this job has no AI reviews; choose at least one")
         chosen = writer or rec.writer
         if chosen not in WRITERS or chosen == "none":
             raise RetryNotAllowed(f"invalid writer: {chosen}")
@@ -950,6 +1005,7 @@ class JobStore:
             job_id,
             "queued",
             writer=chosen,
+            reviews=chosen_reviews,
             skip_asr=True,
             only_publish=False,
         )
@@ -961,9 +1017,10 @@ class JobStore:
         rec = self.job(job_id)
         if rec is None:
             raise UnknownJob(job_id)
-        summary = self.outbox_dir(rec.recording_id) / "summary.md"
-        if not summary.is_file():
-            raise RetryNotAllowed("summary.md is missing")
+        outbox = self.outbox_dir(rec.recording_id)
+        sources = ["transcript.txt", "transcript.md", *(f"{kind}.md" for kind in REVIEW_KINDS)]
+        if not any((outbox / name).is_file() for name in sources):
+            raise RetryNotAllowed("nothing to publish: no transcript or AI review yet")
         self.set_status(job_id, "queued", skip_asr=True, only_publish=True)
         rec = self.job(job_id)
         assert rec is not None
@@ -976,9 +1033,8 @@ class JobStore:
         folder: Path,
         *,
         title: str | None,
-        summarize: bool,
+        reviews: tuple[str, ...] | list[str],
         publish: bool,
-        style: str,
     ) -> JobRecord:
         folder = Path(folder)
         meta_path = folder / "metadata.json"
@@ -994,8 +1050,7 @@ class JobStore:
         chosen_title = (title or str(metadata.get("title") or "")).strip()
         if not chosen_title:
             chosen_title = "recording"
-        if style not in STYLES:
-            raise ValueError(f"invalid style: {style}")
+        chosen_reviews = canonical_reviews(reviews)
         created_at_ms = int(metadata.get("createdAt") or 0)
         if created_at_ms <= 0:
             created_at_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -1024,9 +1079,8 @@ class JobStore:
             recording_id=recording_id,
             created_at_ms=created_at_ms,
             title=chosen_title[:120],
-            summarize=summarize,
+            reviews=chosen_reviews,
             publish=publish,
-            summary_style=style,
             files=tuple(specs),
         )
         rec = self.create_job(req, metadata)
@@ -1039,16 +1093,63 @@ class JobStore:
         action: str,
         title: str | None = None,
     ) -> JobRecord:
-        """Queue a job for a recording already sitting in inbox/ (USB pull or folder drop)."""
-        if action not in USB_ACTIONS:
+        """Queue a job for a recording already sitting in inbox/ (USB pull or folder drop).
+
+        transcribe = transcript only; review = the default AI reviews; publish = those plus publish.
+        """
+        if action not in PROCESS_ACTIONS:
             raise ValueError(f"invalid action: {action}")
         return self.import_folder(
             self.inbox_dir(recording_id),
             title=title,
-            summarize=action != "transcribe",
+            reviews=() if action == "transcribe" else self.config.default_reviews,
             publish=action == "publish",
-            style=self.config.default_summary_style,
         )
+
+    def add_review(self, recording_id: str, kind: str) -> JobRecord:
+        """Queue a job that writes (or rewrites) one AI review from the existing transcript.
+
+        ASR is skipped; the job publishes when the recording's latest job did.
+        """
+        _check_recording_id(recording_id)
+        reviews = canonical_reviews([kind])
+        with self._lock:
+            latest = self.latest_for(recording_id)
+            if latest is None:
+                raise StoreError(f"unknown recording {recording_id}")
+            if self.active_job_for(recording_id) is not None:
+                raise StoreError("a job is still running for this recording; wait for it to finish")
+            if not (self.outbox_dir(recording_id) / "transcript.txt").is_file():
+                raise StoreError("no transcript yet; transcribe the recording first")
+            writer = self.config.default_writer if self.config.default_writer != "none" else latest.writer
+            if writer == "none":
+                raise StoreError("no writer: choose a default writer in Settings")
+            now = utcnow_iso()
+            job_id = str(uuid4())
+            self._conn.execute(
+                "INSERT INTO jobs (job_id, recording_id, status, error, title, reviews, "
+                "publish, writer, publish_folder, skip_asr, "
+                "only_publish, created_at, updated_at, finished_at, asr_json, timings_json) "
+                "VALUES (?, ?, 'queued', NULL, ?, ?, ?, ?, ?, 1, 0, ?, ?, NULL, ?, ?)",
+                (
+                    job_id,
+                    recording_id,
+                    latest.title,
+                    ",".join(reviews),
+                    int(latest.publish),
+                    writer,
+                    latest.publish_folder,
+                    latest.created_at,
+                    now,
+                    json.dumps(latest.asr) if latest.asr is not None else None,
+                    json.dumps({"asr": 0, "writer": 0, "publish": 0}),
+                ),
+            )
+            self._conn.commit()
+            rec = self.job(job_id)
+            assert rec is not None
+            self._write_result_json(rec)
+            return rec
 
     # --- devices (USB ledger) -------------------------------------------------
 
@@ -1296,8 +1397,7 @@ class JobStore:
         title = job.title.strip()
         if not title or len(title) > 120:
             raise ValueError("title must be 1–120 characters")
-        if job.summary_style not in STYLES:
-            raise ValueError(f"invalid summaryStyle: {job.summary_style}")
+        canonical_reviews(job.reviews)
         _check_recording_id(job.recording_id)
         if not job.files:
             raise ValueError("files manifest is empty")
@@ -1320,6 +1420,12 @@ class JobStore:
         if audio_count != 1:
             raise ValueError("manifest must contain exactly one audio.m4a or audio.wav")
 
+    def _predicted_url(self, folder: str | None, reviews: tuple[str, ...]) -> str | None:
+        if not folder:
+            return None
+        page = "summary.html" if "summary" in reviews else "transcript.html"
+        return naming.webdav_url(self.config, Path(folder), page)
+
     def _write_result_json(self, rec: JobRecord) -> None:
         data = self.result_json(rec.job_id)
         dest = self.outbox_dir(rec.recording_id) / "result.json"
@@ -1334,18 +1440,19 @@ class JobStore:
         except ValueError:
             created_at_ms = 0
         files = self._files_for(str(row["job_id"]))
+        reviews = _split_reviews(row["reviews"])
+        folder = str(row["publish_folder"]) if row["publish_folder"] else None
         return JobRecord(
             job_id=str(row["job_id"]),
             recording_id=str(row["recording_id"]),
             status=str(row["status"]),
             error=str(row["error"]) if row["error"] else None,
             title=str(row["title"]),
-            summarize=bool(int(row["summarize"])),
+            reviews=reviews,
             publish=bool(int(row["publish"])),
-            summary_style=str(row["summary_style"]),
             writer=str(row["writer"]),
-            webdav_url=str(row["webdav_url"]) if row["webdav_url"] else None,
-            publish_folder=str(row["publish_folder"]) if row["publish_folder"] else None,
+            webdav_url=self._predicted_url(folder, reviews),
+            publish_folder=folder,
             skip_asr=bool(int(row["skip_asr"])),
             only_publish=bool(int(row["only_publish"])),
             created_at=created_at,

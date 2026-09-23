@@ -2,6 +2,8 @@ package com.chippwalters.r1cord.sync
 
 import android.content.Context
 import android.net.Uri
+import com.chippwalters.r1cord.model.PublishedPage
+import com.chippwalters.r1cord.model.REVIEW_KINDS
 import com.chippwalters.r1cord.storage.OffloadBundle
 import com.chippwalters.r1cord.storage.RecordingLibrary
 import java.io.InputStream
@@ -19,21 +21,21 @@ data class UploadProgress(
     val phase: String,
 )
 
-data class SendResult(val recordingId: String, val webdavUrl: String?)
+data class SendResult(val recordingId: String, val pages: List<PublishedPage>)
 
 /** The recording-store operations the upload flow needs, so tests can substitute a fake. */
 internal interface LibraryOps {
     suspend fun exportBundle(id: String): OffloadBundle
-    suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, sentAt: Long?)
-    suspend fun updateJobStatus(id: String, status: String, url: String?)
+    suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, pages: List<PublishedPage>, sentAt: Long?)
+    suspend fun updateJobStatus(id: String, status: String, url: String?, pages: List<PublishedPage>)
 }
 
 private class RecordingLibraryOps(private val library: RecordingLibrary) : LibraryOps {
     override suspend fun exportBundle(id: String): OffloadBundle = library.exportBundle(id)
-    override suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, sentAt: Long?) =
-        library.updateJob(id, jobId, status, url, sentAt)
-    override suspend fun updateJobStatus(id: String, status: String, url: String?) =
-        library.updateJobStatus(id, status, url)
+    override suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, pages: List<PublishedPage>, sentAt: Long?) =
+        library.updateJob(id, jobId, status, url, pages, sentAt)
+    override suspend fun updateJobStatus(id: String, status: String, url: String?, pages: List<PublishedPage>) =
+        library.updateJobStatus(id, status, url, pages)
 }
 
 class UploadCoordinator internal constructor(
@@ -52,12 +54,12 @@ class UploadCoordinator internal constructor(
         require(maxChunk in 1..OffloadClient.MAX_CHUNK) { "Upload chunk size must be between 1 byte and 64 MiB." }
     }
 
+    /** Sends a recording; [reviews] are the AI reviews to write, any subset of REVIEW_KINDS. */
     suspend fun send(
         recordingId: String,
         title: String,
-        summarize: Boolean,
+        reviews: Collection<String>,
         publish: Boolean,
-        style: String,
         onProgress: (UploadProgress) -> Unit,
     ): SendResult {
         val trimmed = title.trim()
@@ -76,15 +78,14 @@ class UploadCoordinator internal constructor(
                     recordingId = bundle.id,
                     createdAt = bundle.createdAt,
                     title = trimmed.take(120),
-                    summarize = summarize,
+                    reviews = REVIEW_KINDS.filter { it in reviews },
                     publish = publish,
-                    summaryStyle = style,
                     files = files.map { FileEntry(it.name, it.size, it.sha256) },
                 ),
                 bundle.metadataJson,
             )
             createdJob = true
-            library.updateJob(bundle.id, created.jobId, "sending", created.webdavUrl, null)
+            library.updateJob(bundle.id, created.jobId, "sending", created.webdavUrl, created.pages, null)
             // A 422 hash_mismatch at commit means the server deleted the corrupt partials, so the
             // files it names must be streamed again from offset 0 before the next commit attempt.
             var restart: Set<String>? = null
@@ -105,12 +106,14 @@ class UploadCoordinator internal constructor(
                     }
                 }
             }
-            val url = committed?.webdavUrl ?: created.webdavUrl
-            library.updateJob(bundle.id, created.jobId, "processing", url, System.currentTimeMillis())
-            return SendResult(bundle.id, url)
+            val done = committed ?: created
+            val url = done.webdavUrl ?: created.webdavUrl
+            val pages = done.pages.ifEmpty { created.pages }
+            library.updateJob(bundle.id, created.jobId, "processing", url, pages, System.currentTimeMillis())
+            return SendResult(bundle.id, pages)
         } catch (error: Throwable) {
             if (!coroutineContext.isActive) throw error
-            if (!createdJob) library.updateJobStatus(recordingId, "local", null)
+            if (!createdJob) library.updateJobStatus(recordingId, "local", null, emptyList())
             throw error
         }
     }

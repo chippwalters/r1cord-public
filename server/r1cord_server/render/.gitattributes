@@ -1,0 +1,5 @@
+# Published byte-for-byte: theme CSS is vendored verbatim (PROVENANCE.json holds its sha256) and
+# asset names are content hashes, so checkout must not convert line endings.
+themes/** -text
+assets/** -text
+templates/** -text

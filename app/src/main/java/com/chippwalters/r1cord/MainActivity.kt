@@ -40,7 +40,7 @@ import com.chippwalters.r1cord.ui.R1cordUi
 import com.chippwalters.r1cord.ui.R1cordViewModel
 import com.chippwalters.r1cord.ui.RecorderColors
 import com.chippwalters.r1cord.ui.RecorderTypography
-import com.chippwalters.r1cord.ui.StylePicker
+import com.chippwalters.r1cord.ui.ReviewToggles
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -92,21 +92,21 @@ class MainActivity : ComponentActivity() {
         val needed = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA, Manifest.permission.POST_NOTIFICATIONS)
             .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) permissions.launch(needed.toTypedArray())
-        if (savedInstanceState == null) openSummaryFrom(intent)
+        if (savedInstanceState == null) openPageFrom(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        openSummaryFrom(intent)
+        openPageFrom(intent)
     }
 
-    /** The "Sent" notification lands here with the published summary URL to show in the in-app viewer. */
-    private fun openSummaryFrom(intent: Intent?) {
-        val url = intent?.getStringExtra(EXTRA_SUMMARY_URL)?.takeIf { it.isNotBlank() } ?: return
-        intent.removeExtra(EXTRA_SUMMARY_URL)
+    /** The "Sent" notification lands here with the published page URL to show in the in-app viewer. */
+    private fun openPageFrom(intent: Intent?) {
+        val url = intent?.getStringExtra(EXTRA_PAGE_URL)?.takeIf { it.isNotBlank() } ?: return
+        intent.removeExtra(EXTRA_PAGE_URL)
         settingsOpen = false
-        model.openSummary(url)
+        model.openPage(url)
     }
 
     override fun onResume() {
@@ -261,15 +261,13 @@ class MainActivity : ComponentActivity() {
                             pairing?.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                             pairing?.serverName?.let { Text("Paired with $it", style = MaterialTheme.typography.bodyMedium) }
                         }
-                        var summarize by remember { mutableStateOf(OffloadSettings.defaultSummarize(this@MainActivity)) }
+                        var reviews by remember { mutableStateOf(OffloadSettings.defaultReviews(this@MainActivity)) }
                         var publish by remember { mutableStateOf(OffloadSettings.defaultPublish(this@MainActivity)) }
-                        var style by remember { mutableStateOf(OffloadSettings.defaultStyle(this@MainActivity)) }
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text("Summarize", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                            Switch(checked = summarize, onCheckedChange = {
-                                summarize = it
-                                OffloadSettings.setDefaultSummarize(this@MainActivity, it)
-                            })
+                        Text("Default AI reviews", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        ReviewToggles(reviews, longLabels = true) {
+                            reviews = it
+                            OffloadSettings.setDefaultReviews(this@MainActivity, it)
                         }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("Publish", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
@@ -277,10 +275,6 @@ class MainActivity : ComponentActivity() {
                                 publish = it
                                 OffloadSettings.setDefaultPublish(this@MainActivity, it)
                             })
-                        }
-                        StylePicker(style) {
-                            style = it
-                            OffloadSettings.setDefaultStyle(this@MainActivity, it)
                         }
                         Button(onClick = { openSystemPage(Settings.ACTION_HOME_SETTINGS) }, modifier = Modifier.fillMaxWidth()) { Text("Home app") }
                         Button(onClick = {
@@ -324,6 +318,6 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        const val EXTRA_SUMMARY_URL = "com.chippwalters.r1cord.extra.SUMMARY_URL"
+        const val EXTRA_PAGE_URL = "com.chippwalters.r1cord.extra.PAGE_URL"
     }
 }

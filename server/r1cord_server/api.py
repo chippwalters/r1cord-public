@@ -15,8 +15,8 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .auth import require_token
+from .config import canonical_reviews
 from .store import (
-    STYLES,
     WRITERS,
     AudioMismatch,
     FileSpec,
@@ -56,10 +56,18 @@ class JobIn(BaseModel):
     recordingId: str
     createdAt: int
     title: str
+    # `reviews` wins when present. Without it (apps up to 0.3.2) `summarize` picks ["summary"] or [];
+    # `summaryStyle` is accepted and ignored.
+    reviews: list[str] | None = None
     summarize: bool = True
     publish: bool = True
-    summaryStyle: str = "notes"
+    summaryStyle: str | None = None
     files: list[FileIn]
+
+    def requested_reviews(self) -> tuple[str, ...]:
+        if self.reviews is None:
+            return ("summary",) if self.summarize else ()
+        return canonical_reviews(self.reviews)
 
 
 class CreateJobBody(BaseModel):
@@ -73,6 +81,7 @@ class PairBody(BaseModel):
 
 class RetryWriterBody(BaseModel):
     writer: str | None = None
+    reviews: list[str] | None = None
 
 
 def _error(
@@ -142,8 +151,6 @@ def _validate_job_in(job: JobIn) -> str | None:
     title = job.title.strip()
     if not title or len(title) > 120:
         return "title must be 1–120 characters after trim"
-    if job.summaryStyle not in STYLES:
-        return "summaryStyle must be notes, minutes, or article"
     # Mirrors store._check_recording_id: ids become folder names, so refuse escapes and
     # anything Windows would normalize (".", "..", separators, NUL, surrounding whitespace).
     if (
@@ -194,6 +201,10 @@ def pair(body: PairBody, request: Request) -> JSONResponse:
 @router.post("/jobs", dependencies=[Depends(require_token)])
 @_guarded
 def create_job(body: CreateJobBody, request: Request) -> JSONResponse:
+    try:
+        reviews = body.job.requested_reviews()
+    except ValueError as exc:
+        return _error(request, 400, "invalid_request", str(exc))
     problem = _validate_job_in(body.job)
     if problem:
         return _error(request, 422, "invalid_request", problem)
@@ -202,9 +213,8 @@ def create_job(body: CreateJobBody, request: Request) -> JSONResponse:
         recording_id=job.recordingId,
         created_at_ms=int(job.createdAt),
         title=job.title.strip(),
-        summarize=bool(job.summarize),
+        reviews=reviews,
         publish=bool(job.publish),
-        summary_style=job.summaryStyle,
         files=tuple(
             FileSpec(name=f.name, size=int(f.size), sha256=f.sha256.lower())
             for f in job.files
@@ -330,6 +340,7 @@ def list_recordings(request: Request) -> JSONResponse:
             "jobId": s.job_id,
             "status": s.status,
             "webdavUrl": s.webdav_url,
+            "pages": s.pages,
             "updatedAt": s.updated_at,
         }
         for s in request.app.state.store.recordings_index()
@@ -354,6 +365,7 @@ async def retry_writer(job_id: str, request: Request) -> JSONResponse:
     if rec is None:
         return _error(request, 404, "not_found", f"unknown job {job_id}")
     writer: str | None = None
+    reviews: tuple[str, ...] | None = None
     if request.headers.get("content-type", "").startswith("application/json"):
         raw = await request.body()
         if raw:
@@ -364,13 +376,21 @@ async def retry_writer(job_id: str, request: Request) -> JSONResponse:
                     request,
                     422,
                     "invalid_request",
-                    'retry body must be {"writer": "claude_code" | "codex" | "grok_build"}',
+                    'retry body must be {"writer": "claude_code" | "codex" | "grok_build", '
+                    '"reviews": ["summary" | "outline" | "organized", ...]}',
                 )
             writer = payload.writer
+            if payload.reviews is not None:
+                try:
+                    reviews = canonical_reviews(payload.reviews)
+                except ValueError as exc:
+                    return _error(request, 422, "invalid_request", str(exc))
+                if not reviews:
+                    return _error(request, 422, "invalid_request", "reviews must name at least one review")
     if writer is not None and writer not in WRITERS:
         return _error(request, 422, "invalid_request", f"invalid writer: {writer}")
     try:
-        rec = store.retry_writer(job_id, writer)
+        rec = store.retry_writer(job_id, writer, reviews)
     except RetryNotAllowed as exc:
         return _error(request, 409, "retry_not_allowed", str(exc))
     return JSONResponse(status_code=200, content={"status": rec.status})

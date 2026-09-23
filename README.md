@@ -3,6 +3,10 @@
 **This repository is the source code.** If you just want to install R1CORD, you do not need
 anything here — go to **https://www.widgetgadget.com/cw1/R1CORD/** and download it.
 
+> **Beta.** Version 0.3.3 of the app and the desktop companion is a beta release. A new
+> cross-platform architecture for the desktop companion (Windows, macOS and Linux) is coming soon;
+> today's companion is Windows-only.
+
 ---
 
 A voice recorder for the [Rabbit R1](https://www.rabbit.tech/), plus an optional desktop
@@ -100,8 +104,8 @@ Details, settings and the Wi-Fi alternative are in the
 [user guide](docs/user-guide.md#using-the-desktop-companion); the server's own
 [README](server/README.md) covers configuration and internals.
 
-Tests (no GPU or device needed): `server\.venv\Scripts\python.exe -m pytest -q` (245 companion tests) and
-`.\gradlew.bat :app:testDebugUnitTest` (95 app tests on the JVM, Robolectric).
+Tests (no GPU or device needed): `server\.venv\Scripts\python.exe -m pytest -q` (325 companion tests) and
+`.\gradlew.bat :app:testDebugUnitTest` (100 app tests on the JVM, Robolectric).
 
 ## Design notes
 
@@ -113,8 +117,9 @@ Tests (no GPU or device needed): `server\.venv\Scripts\python.exe -m pytest -q` 
 - **The companion only reads.** It pulls files from an adopted device; it never writes to or
   deletes from the R1.
 - Transcription is [faster-whisper](https://github.com/SYSTRAN/faster-whisper) running locally,
-  CPU by default and CUDA if you have it. Optional summaries and page publishing exist but need
-  extra tools and are off unless configured.
+  CPU by default and CUDA if you have it. Optional AI reviews (summary, outline, cleaned-up text)
+  need a coding-assistant CLI signed in on the PC; publishing them as web pages needs only a folder
+  your web host serves. Both are off unless configured.
 
 ## Status and license
 

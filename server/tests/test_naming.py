@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from r1cord_server.config import Config
-from r1cord_server.naming import publish_folder, slugify, webdav_url
+from r1cord_server.naming import publish_folder, published_pages, slugify, webdav_url
 
 
 def test_slugify_basic() -> None:
@@ -78,7 +78,7 @@ def test_webdav_url(tmp_path: Path) -> None:
         public_url_base="https://example.test/files",
     )
     folder = cfg.webdav_folder / "2026" / "09" / "20260920-2000-site-visit"
-    url = webdav_url(cfg, folder)
+    url = webdav_url(cfg, folder, "summary.html")
     assert url == "https://example.test/files/2026/09/20260920-2000-site-visit/summary.html"
 
 def test_slugify_unicode() -> None:
@@ -121,7 +121,7 @@ def test_webdav_url_trailing_slash_base(tmp_path: Path) -> None:
     )
     folder = cfg.webdav_folder / "2026" / "09" / "20260920-2000-site-visit"
     assert (
-        webdav_url(cfg, folder)
+        webdav_url(cfg, folder, "summary.html")
         == "https://example.test/files/2026/09/20260920-2000-site-visit/summary.html"
     )
 
@@ -130,7 +130,7 @@ def test_webdav_url_empty_base(tmp_path: Path) -> None:
     cfg = Config(webdav_folder=tmp_path / "wd", datastore=tmp_path / "ds")
     folder = cfg.webdav_folder / "2026" / "09" / "20260920-2000-site-visit"
     assert (
-        webdav_url(cfg, folder)
+        webdav_url(cfg, folder, "summary.html")
         == "/2026/09/20260920-2000-site-visit/summary.html"
     )
 
@@ -143,7 +143,7 @@ def test_webdav_url_encodes_segments(tmp_path: Path) -> None:
     )
     folder = cfg.webdav_folder / "2026" / "09" / "20260920-2000 with space"
     assert (
-        webdav_url(cfg, folder)
+        webdav_url(cfg, folder, "summary.html")
         == "https://x.test/2026/09/20260920-2000%20with%20space/summary.html"
     )
 
@@ -155,7 +155,7 @@ def test_webdav_url_folder_outside_root_uses_last_three_segments(tmp_path: Path)
         public_url_base="https://x.test",
     )
     outside = tmp_path / "elsewhere" / "2025" / "12" / "20251209-1010-other"
-    assert webdav_url(cfg, outside) == "https://x.test/2025/12/20251209-1010-other/summary.html"
+    assert webdav_url(cfg, outside, "summary.html") == "https://x.test/2025/12/20251209-1010-other/summary.html"
 
 
 def test_webdav_url_sibling_prefix_of_root_is_not_under_root(tmp_path: Path) -> None:
@@ -167,7 +167,28 @@ def test_webdav_url_sibling_prefix_of_root_is_not_under_root(tmp_path: Path) -> 
         public_url_base="https://x.test",
     )
     sibling = tmp_path / "wd2" / "2025" / "12" / "20251209-1010-other"
-    assert webdav_url(cfg, sibling) == "https://x.test/2025/12/20251209-1010-other/summary.html"
+    assert webdav_url(cfg, sibling, "summary.html") == "https://x.test/2025/12/20251209-1010-other/summary.html"
+
+
+def test_webdav_url_names_the_page(tmp_path: Path) -> None:
+    cfg = Config(webdav_folder=tmp_path / "wd", datastore=tmp_path / "ds", public_url_base="https://x.test")
+    folder = cfg.webdav_folder / "2026" / "09" / "20260920-2000-site-visit"
+    assert webdav_url(cfg, folder, "transcript.html") == "https://x.test/2026/09/20260920-2000-site-visit/transcript.html"
+
+
+def test_published_pages_lists_existing_html_in_page_order(tmp_path: Path) -> None:
+    cfg = Config(webdav_folder=tmp_path / "wd", datastore=tmp_path / "ds", public_url_base="https://x.test")
+    folder = cfg.webdav_folder / "2026" / "09" / "20260920-2000-site-visit"
+    assert published_pages(cfg, folder) == []  # folder not created yet
+    assert published_pages(cfg, None) == []
+    folder.mkdir(parents=True)
+    for name in ("organized.html", "transcript.html", "summary.md", "outline.md", "summary.abc.html"):
+        (folder / name).write_text("x", encoding="utf-8")
+    base = "https://x.test/2026/09/20260920-2000-site-visit"
+    assert published_pages(cfg, folder) == [
+        {"kind": "transcript", "url": f"{base}/transcript.html"},
+        {"kind": "organized", "url": f"{base}/organized.html"},
+    ]
 
 
 def test_webdav_url_root_match_is_case_insensitive(tmp_path: Path) -> None:
@@ -178,6 +199,6 @@ def test_webdav_url_root_match_is_case_insensitive(tmp_path: Path) -> None:
     )
     folder = tmp_path / "WD" / "2026" / "09" / "20260920-2000-site-visit"
     assert (
-        webdav_url(cfg, folder)
+        webdav_url(cfg, folder, "summary.html")
         == "https://x.test/2026/09/20260920-2000-site-visit/summary.html"
     )

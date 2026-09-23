@@ -1,0 +1,26 @@
+{#- Standard shell: MD DOCS' browser export for plain themes (body.theme-<id> + theme CSS), plus
+    a minimal header bar with the document title, page navigation and Download .md. No logo. -#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="{{ csp }}">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }} — {{ label }}</title>
+  <link rel="stylesheet" href="{{ site_css }}">
+  <link rel="stylesheet" href="{{ theme_css }}">
+</head>
+<body class="theme-{{ theme_id }}">
+  <header class="r1-bar">
+    <span class="r1-title">{{ title }}</span>
+    <nav class="r1-pages" aria-label="Pages">
+{% for item in nav %}
+      <a class="r1-link" href="{{ item.href }}"{% if item.current %} aria-current="page"{% endif %}>{{ item.label }}</a>
+{% endfor %}
+    </nav>
+    <span class="r1-spacer"></span>
+    <a class="r1-link r1-download" href="{{ md_href }}" download>Download .md</a>
+  </header>
+{{ body }}
+</body>
+</html>

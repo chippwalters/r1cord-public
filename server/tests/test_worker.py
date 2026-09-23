@@ -5,15 +5,15 @@ import logging
 import time
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
-from r1cord_server import mailer, mddocs, naming
+from r1cord_server import mailer, naming, render
 from r1cord_server.config import Config
 from r1cord_server.pipeline import asr as asr_mod
 from r1cord_server.pipeline import writers as writers_mod
 from r1cord_server.pipeline.asr import AsrResult
+from r1cord_server.pipeline.instructions import DEFAULT_PROMPTS, save_prompt
 from r1cord_server.store import JobStore
 from r1cord_server.worker import Worker
 
@@ -48,53 +48,42 @@ class FakeWriters:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.fail = False
+        self.fail_kinds: set[str] = set()
 
-    def summarize(self, work_dir: Path, *, writer: str, timeout_s: int, config, log) -> Path:
+    def run_writer(self, work_dir: Path, *, kind: str, writer: str, timeout_s: int, config, log) -> Path:
         n = len(self.calls) + 1
-        self.calls.append({"work": work_dir, "writer": writer, "timeout_s": timeout_s})
-        if self.fail:
-            raise RuntimeError("claude CLI died")
         instructions = (work_dir / "INSTRUCTIONS.md").read_text(encoding="utf-8")
-        assert "Site visit" in instructions, "writer must receive INSTRUCTIONS.md with the title"
-        (work_dir / "summary.md").write_text(
-            f"[brand-header]\n# Site visit\n\nTake {n}\n", encoding="utf-8"
+        self.calls.append(
+            {"work": work_dir, "kind": kind, "writer": writer, "timeout_s": timeout_s, "instructions": instructions}
         )
-        return work_dir / "summary.md"
+        if self.fail or kind in self.fail_kinds:
+            raise RuntimeError("claude CLI died")
+        assert "Site visit" in instructions, "writer must receive INSTRUCTIONS.md with the title"
+        assert f"Write ONLY {kind}.md" in instructions
+        assert (work_dir / "transcript.txt").is_file()
+        (work_dir / f"{kind}.md").write_text(f"# Site visit\n\n{kind} take {n}\n", encoding="utf-8")
+        return work_dir / f"{kind}.md"
 
 
-class FakeBridge:
-    """Stands in for MdDocsBridge; records actions and writes summary.html like the app."""
+def _published(folder: Path) -> list[str]:
+    """Kinds whose page is in the publish folder, in page order."""
+    return [kind for kind in ("transcript", "summary", "outline", "organized") if (folder / f"{kind}.html").is_file()]
 
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, dict]] = []
-        self.fail_on: str | None = None
-        self.folder: Path | None = None
 
-    def ensure_running(self) -> None:
-        self.calls.append(("ensure_running", {}))
-
-    def call(self, action: str, params: dict) -> dict:
-        self.calls.append((action, dict(params)))
-        if action == self.fail_on:
-            raise RuntimeError(f"{action} exploded")
-        if action == "open_project":
-            self.folder = Path(params["folderPath"])
-        if action == "publish" and self.folder is not None:
-            (self.folder / "summary.html").write_text("<html></html>", encoding="utf-8")
-        return {"success": True}
+def _site(rig: Rig) -> Path:
+    return rig.store.outbox_dir(RECORDING_ID) / "site"
 
 
 class Rig:
     def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         self.cfg = _cfg(tmp_path)
         self.store = JobStore(self.cfg)
-        self.worker = Worker(self.store, self.cfg)
+        self.prompts = tmp_path / "prompts"
+        self.worker = Worker(self.store, self.cfg, prompts_dir=self.prompts)
         self.fake_asr = FakeAsr()
         self.fake_writers = FakeWriters()
-        self.bridge = FakeBridge()
         monkeypatch.setattr(asr_mod, "transcribe", self.fake_asr.transcribe)
-        monkeypatch.setattr(writers_mod, "summarize", self.fake_writers.summarize)
-        monkeypatch.setattr(mddocs, "MdDocsBridge", lambda: self.bridge)
+        monkeypatch.setattr(writers_mod, "run_writer", self.fake_writers.run_writer)
 
     def stage_recording(self, recording_id: str = RECORDING_ID, *, photos: tuple[str, ...] = ()) -> Path:
         inbox = self.store.inbox_dir(recording_id)
@@ -119,6 +108,10 @@ class Rig:
         self.stage_recording(recording_id, photos=photos)
         return self.store.process_inbox(recording_id, action=action)
 
+    def queue_reviews(self, reviews: tuple[str, ...], *, publish: bool, recording_id: str = RECORDING_ID):
+        inbox = self.stage_recording(recording_id)
+        return self.store.import_folder(inbox, title=None, reviews=reviews, publish=publish)
+
     def run(self, job_id: str):
         rec = self.store.job(job_id)
         assert rec is not None
@@ -141,7 +134,7 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     ]
 
 
-def test_transcribe_only_job_completes_without_writer_or_publish(rig: Rig) -> None:
+def test_transcribe_only_job_completes_and_builds_the_local_site_without_publishing(rig: Rig) -> None:
     job = rig.queue("transcribe")
 
     rec = rig.run(job.job_id)
@@ -149,72 +142,129 @@ def test_transcribe_only_job_completes_without_writer_or_publish(rig: Rig) -> No
     assert rec.status == "complete" and rec.error is None
     outbox = rig.store.outbox_dir(RECORDING_ID)
     assert (outbox / "transcript.txt").read_text(encoding="utf-8") == "hello world"
+    page = (outbox / "transcript.md").read_text(encoding="utf-8")  # always written after ASR
+    assert page.startswith("# Site visit\n") and "hello world" in page
     assert rig.fake_writers.calls == []
-    assert rig.bridge.calls == []
+    assert (_site(rig) / "transcript.html").is_file()
+    assert not Path(job.publish_folder).exists()  # built here, never deployed
     log_lines = "\n".join(rig.store.read_log(job.job_id))
-    assert "asr: done" in log_lines and "writer: skipped" in log_lines
+    assert "asr: done" in log_lines and "writer: skipped" in log_lines and "publish: skipped" in log_lines
     assert rig.store.result_json(job.job_id)["webdavUrl"] is None
 
 
-def test_summarize_without_publish_installs_summary_and_photos(rig: Rig) -> None:
-    job = rig.queue("summarize", photos=("photo-p1.jpg",))
+def test_review_without_publish_installs_summary_and_photos_and_builds_the_site(rig: Rig) -> None:
+    job = rig.queue("review", photos=("photo-p1.jpg",))
 
     rec = rig.run(job.job_id)
 
     assert rec.status == "complete"
     outbox = rig.store.outbox_dir(RECORDING_ID)
-    summary = (outbox / "summary.md").read_text(encoding="utf-8")
-    assert summary.startswith("[brand-header]\n")
+    assert (outbox / "summary.md").read_text(encoding="utf-8").startswith("# Site visit\n")
     assert (outbox / "photos" / "photo-p1.jpg").is_file()
-    assert rig.bridge.calls == []  # publish never ran
+    assert (_site(rig) / "summary.html").is_file() and (_site(rig) / "transcript.html").is_file()
+    assert not Path(job.publish_folder).exists()  # publish never ran
+    assert rig.store.result_json(job.job_id)["pages"] == []
     assert rig.store.result_json(job.job_id)["webdavUrl"] is None
-    assert rig.fake_writers.calls[0]["timeout_s"] == rig.cfg.writer_timeout_s
+    call = rig.fake_writers.calls[0]
+    assert call["timeout_s"] == rig.cfg.writer_timeout_s
+    assert call["work"] == rig.store.work_dir(job.job_id) / "summary"  # each review in its own folder
+    assert (call["work"] / "photos" / "photo-p1.jpg").is_file()
 
 
-def test_publish_action_runs_bridge_and_keeps_webdav_url(rig: Rig) -> None:
+def test_publish_action_deploys_the_site_with_transcript_and_reviews(rig: Rig) -> None:
     job = rig.queue("publish")
 
     rec = rig.run(job.job_id)
 
     assert rec.status == "complete"
-    assert rig.store.result_json(job.job_id)["webdavUrl"] == naming.webdav_url(
-        rig.cfg, Path(job.publish_folder)
-    )
-    assert [a for a, _ in rig.bridge.calls] == [
-        "ensure_running", "open_project", "load_file", "refresh_file", "set_theme", "save_file_as", "publish",
-    ]
-    html = Path(job.publish_folder) / "summary.html"
-    assert html.is_file() and html.read_text(encoding="utf-8") == "<html></html>"
+    folder = Path(job.publish_folder)
+    result = rig.store.result_json(job.job_id)
+    assert result["webdavUrl"] == naming.webdav_url(rig.cfg, folder, "summary.html")
+    assert [p["kind"] for p in result["pages"]] == ["transcript", "summary"]
+    assert _published(folder) == ["transcript", "summary"]
+    assert (folder / "summary.md").read_text(encoding="utf-8") == "# Site visit\n\nsummary take 1\n"
+    assert (folder / "summary.html").read_bytes() == (_site(rig) / "summary.html").read_bytes()
+    log_lines = "\n".join(rig.store.read_log(job.job_id))
+    assert "publish: wrote summary.html\n" in log_lines and "publish: done (transcript, summary)" in log_lines
 
 
-def test_only_publish_retry_skips_asr_and_writer(rig: Rig) -> None:
-    job = rig.queue("summarize")
+def test_failed_review_does_not_stop_the_others_and_ends_in_error(rig: Rig, caplog: pytest.LogCaptureFixture) -> None:
+    rig.fake_writers.fail_kinds = {"outline"}
+    job = rig.queue_reviews(("summary", "outline"), publish=True)
+
+    with caplog.at_level(logging.WARNING, logger="r1cord_server.worker"):
+        rec = rig.run(job.job_id)
+
+    assert rec.status == "error"
+    assert rec.error is not None and rec.error.startswith("writer: outline: ") and "summary" not in rec.error
+    outbox = rig.store.outbox_dir(RECORDING_ID)
+    assert (outbox / "summary.md").is_file() and not (outbox / "outline.md").exists()
+    assert _published(Path(job.publish_folder)) == ["transcript", "summary"]  # published what succeeded
+    result = rig.store.result_json(job.job_id)
+    assert result["reviews"] == ["summary", "outline"]
+    assert [p["kind"] for p in result["pages"]] == ["transcript", "summary"]
+    log_lines = "\n".join(rig.store.read_log(job.job_id))
+    assert "writer: summary: done in" in log_lines and "writer: outline: failed" in log_lines
+    warnings = _warnings(caplog)
+    assert len(warnings) == 1 and job.job_id in warnings[0] and "outline" in warnings[0]
+
+
+def test_edited_prompt_reaches_instructions(rig: Rig) -> None:
+    save_prompt(rig.prompts, "organized", "Keep every word the speaker said about fences.")
+    job = rig.queue_reviews(("summary", "organized"), publish=False)
+
+    rig.run(job.job_id)
+
+    by_kind = {c["kind"]: c["instructions"] for c in rig.fake_writers.calls}
+    assert "Keep every word the speaker said about fences." in by_kind["organized"]
+    assert "Keep every word the speaker said about fences." not in by_kind["summary"]
+    assert DEFAULT_PROMPTS["summary"].strip() in by_kind["summary"]
+
+
+def test_add_review_skips_asr_and_publishes_like_the_latest_job(rig: Rig) -> None:
+    first = rig.queue("publish")
+    rig.run(first.job_id)
+
+    added = rig.store.add_review(RECORDING_ID, "organized")
+    rec = rig.run(added.job_id)
+
+    assert rec.status == "complete"
+    assert len(rig.fake_asr.calls) == 1
+    assert [c["kind"] for c in rig.fake_writers.calls] == ["summary", "organized"]
+    assert _published(Path(first.publish_folder)) == ["transcript", "summary", "organized"]
+    pages = rig.store.result_json(added.job_id)["pages"]
+    assert [p["kind"] for p in pages] == ["transcript", "summary", "organized"]
+
+
+def test_only_publish_retry_skips_asr_and_writer_and_republishes_every_page(rig: Rig) -> None:
+    job = rig.queue_reviews(("summary", "outline"), publish=False)
     rig.run(job.job_id)
     assert rig.fake_asr.calls and rig.fake_writers.calls
+    (rig.store.outbox_dir(RECORDING_ID) / "transcript.md").unlink()  # rebuilt from transcript.txt
     rig.store.retry_publish(job.job_id)
 
     rec = rig.run(job.job_id)
 
     assert rec.status == "complete"
-    assert len(rig.fake_asr.calls) == 1 and len(rig.fake_writers.calls) == 1  # not re-run
-    assert rig.bridge.calls  # publish did run
+    assert len(rig.fake_asr.calls) == 1 and len(rig.fake_writers.calls) == 2  # not re-run
+    assert _published(Path(job.publish_folder)) == ["transcript", "summary", "outline"]
 
 
 def test_retry_writer_skips_asr_and_uses_new_writer(rig: Rig) -> None:
-    job = rig.queue("summarize")
+    job = rig.queue("review")
     rig.run(job.job_id)
-    rig.store.retry_writer(job.job_id, "codex")
+    rig.store.retry_writer(job.job_id, "codex", ["outline"])
 
     rec = rig.run(job.job_id)
 
-    assert rec.status == "complete" and rec.writer == "codex"
+    assert rec.status == "complete" and rec.writer == "codex" and rec.reviews == ("outline",)
     assert len(rig.fake_asr.calls) == 1
-    assert rig.fake_writers.calls[-1]["writer"] == "codex"
+    assert rig.fake_writers.calls[-1]["writer"] == "codex" and rig.fake_writers.calls[-1]["kind"] == "outline"
 
 
 def test_writer_none_completes_with_skipped_writer_log(rig: Rig) -> None:
     job = rig.queue("transcribe")
-    rig.store.set_status(job.job_id, "queued", writer="none", summarize=True)
+    rig.store.set_status(job.job_id, "queued", writer="none", reviews=("summary",))
 
     rec = rig.run(job.job_id)
 
@@ -223,8 +273,8 @@ def test_writer_none_completes_with_skipped_writer_log(rig: Rig) -> None:
     assert "writer: skipped" in "\n".join(rig.store.read_log(job.job_id))
 
 
-def test_retry_writer_rewrites_summary_and_archives_previous(rig: Rig) -> None:
-    job = rig.queue("summarize")
+def test_retry_writer_rewrites_review_and_archives_previous(rig: Rig) -> None:
+    job = rig.queue("review")
     rig.run(job.job_id)
     outbox = rig.store.outbox_dir(RECORDING_ID)
     first = (outbox / "summary.md").read_text(encoding="utf-8")
@@ -237,10 +287,16 @@ def test_retry_writer_rewrites_summary_and_archives_previous(rig: Rig) -> None:
     assert archived.read_text(encoding="utf-8") == first
     assert (outbox / "summary.md").read_text(encoding="utf-8") != first
 
+    # A later job rewriting it names the archive after the job that wrote the replaced copy.
+    second = (outbox / "summary.md").read_text(encoding="utf-8")
+    added = rig.store.add_review(RECORDING_ID, "summary")
+    rig.run(added.job_id)
+    assert (outbox / f"summary.{job.job_id}-2.md").read_text(encoding="utf-8") == second
+
 
 def test_asr_failure_sets_step_prefixed_error_and_no_transcript(rig: Rig, caplog: pytest.LogCaptureFixture) -> None:
     rig.fake_asr.fail = True
-    job = rig.queue("summarize")
+    job = rig.queue("review")
 
     with caplog.at_level(logging.WARNING, logger="r1cord_server.worker"):
         rec = rig.run(job.job_id)
@@ -255,7 +311,7 @@ def test_asr_failure_sets_step_prefixed_error_and_no_transcript(rig: Rig, caplog
 
 def test_writer_failure_keeps_transcript(rig: Rig, caplog: pytest.LogCaptureFixture) -> None:
     rig.fake_writers.fail = True
-    job = rig.queue("summarize")
+    job = rig.queue("review")
 
     with caplog.at_level(logging.WARNING, logger="r1cord_server.worker"):
         rec = rig.run(job.job_id)
@@ -268,34 +324,29 @@ def test_writer_failure_keeps_transcript(rig: Rig, caplog: pytest.LogCaptureFixt
     assert len(warnings) == 1 and job.job_id in warnings[0] and "writer" in warnings[0]
 
 
-def test_publish_failure_keeps_summary(rig: Rig, caplog: pytest.LogCaptureFixture) -> None:
+def test_publish_failure_keeps_summary_and_the_local_site(
+    rig: Rig, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     job = rig.queue("publish")
 
-    def failing_bridge() -> FakeBridge:
-        bridge = FakeBridge()
-        bridge.fail_on = "set_theme"
-        return bridge
+    def unreachable(src: Path, dest: Path) -> list[str]:
+        raise OSError("WebDAV mount is gone")
 
-    import r1cord_server.mddocs as mddocs_mod
-
-    orig = mddocs_mod.MdDocsBridge
-    mddocs_mod.MdDocsBridge = failing_bridge  # type: ignore[assignment]
-    try:
-        with caplog.at_level(logging.WARNING, logger="r1cord_server.worker"):
-            rec = rig.run(job.job_id)
-    finally:
-        mddocs_mod.MdDocsBridge = orig  # type: ignore[assignment]
+    monkeypatch.setattr(render, "deploy_site", unreachable)
+    with caplog.at_level(logging.WARNING, logger="r1cord_server.worker"):
+        rec = rig.run(job.job_id)
 
     assert rec.status == "error"
-    assert rec.error is not None and rec.error.startswith("publish:") and "set_theme" in rec.error
+    assert rec.error is not None and rec.error.startswith("publish:") and "WebDAV mount is gone" in rec.error
     summary = rig.store.outbox_dir(RECORDING_ID) / "summary.md"
-    assert summary.is_file() and summary.read_text(encoding="utf-8").startswith("[brand-header]\n")
+    assert summary.is_file() and summary.read_text(encoding="utf-8").startswith("# Site visit\n")
+    assert (_site(rig) / "summary.html").is_file()  # the local view still has it
     warnings = _warnings(caplog)
     assert len(warnings) == 1 and job.job_id in warnings[0] and "publish" in warnings[0]
 
 
 def test_missing_audio_file_errors_asr_step(rig: Rig, caplog: pytest.LogCaptureFixture) -> None:
-    job = rig.queue("summarize")
+    job = rig.queue("review")
     (rig.store.inbox_dir(RECORDING_ID) / "audio.m4a").unlink()
 
     with caplog.at_level(logging.WARNING, logger="r1cord_server.worker"):
@@ -307,23 +358,25 @@ def test_missing_audio_file_errors_asr_step(rig: Rig, caplog: pytest.LogCaptureF
     assert len(warnings) == 1 and job.job_id in warnings[0]
 
 
-def test_only_publish_without_summary_errors_publish_step(rig: Rig, caplog: pytest.LogCaptureFixture) -> None:
-    job = rig.queue("summarize")
+def test_only_publish_with_nothing_to_publish_errors_publish_step(rig: Rig, caplog: pytest.LogCaptureFixture) -> None:
+    job = rig.queue("review")
     rig.run(job.job_id)
-    (rig.store.outbox_dir(RECORDING_ID) / "summary.md").unlink()
+    outbox = rig.store.outbox_dir(RECORDING_ID)
+    for name in ("summary.md", "transcript.md", "transcript.txt"):
+        (outbox / name).unlink()
     rig.store.set_status(job.job_id, "queued", only_publish=True, skip_asr=True)
 
     with caplog.at_level(logging.WARNING, logger="r1cord_server.worker"):
         rec = rig.run(job.job_id)
 
-    assert rec.status == "error" and rec.error == "publish: summary.md is missing"
+    assert rec.status == "error" and rec.error == "publish: nothing to publish (no transcript or AI review yet)"
     assert len(rig.fake_asr.calls) == 1  # first pass only
     warnings = _warnings(caplog)
     assert len(warnings) == 1 and job.job_id in warnings[0] and "publish" in warnings[0]
 
 
 def test_only_publish_without_folder_errors_publish_step(rig: Rig, caplog: pytest.LogCaptureFixture) -> None:
-    job = rig.queue("summarize")
+    job = rig.queue("review")
     rig.run(job.job_id)
     rig.store.set_status(job.job_id, "queued", only_publish=True, skip_asr=True, publish_folder="")
 
@@ -336,7 +389,7 @@ def test_only_publish_without_folder_errors_publish_step(rig: Rig, caplog: pytes
 
 
 def test_worker_crash_is_recorded_as_error(rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
-    job = rig.queue("summarize")
+    job = rig.queue("review")
 
     def broken_append_log(job_id: str, line: str) -> None:
         raise RuntimeError("db gone")
@@ -362,7 +415,7 @@ def test_worker_crash_is_recorded_as_error(rig: Rig, monkeypatch: pytest.MonkeyP
 def test_email_sent_only_when_enabled_and_complete(rig: Rig, monkeypatch: pytest.MonkeyPatch) -> None:
     sent: list[tuple] = []
     monkeypatch.setattr(mailer, "email_job", lambda store, config, job_id: sent.append((job_id, config.email_enabled)) or "mid-1")
-    job = rig.queue("summarize")
+    job = rig.queue("review")
 
     # Disabled in the default config: a complete job never triggers a send.
     rec = rig.run(job.job_id)
@@ -389,7 +442,7 @@ def test_email_failure_logged_to_job_without_status_change(
 
     monkeypatch.setattr(mailer, "email_job", broken_email)
     emailing_worker = Worker(rig.store, replace(rig.cfg, email_enabled=True, email_to="me@example.test"))
-    job = rig.queue("summarize")
+    job = rig.queue("review")
     rig.worker._run_job(job)
 
     with caplog.at_level(logging.WARNING, logger="r1cord_server.worker"):

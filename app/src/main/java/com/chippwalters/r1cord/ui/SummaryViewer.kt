@@ -53,10 +53,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 
 /**
- * Published summary pages open here, in a WebView, instead of in the device browser: Chrome
- * cannot keep its GPU process alive on the R1, and when it dies Android falls back to the Home
- * app (R1CORD), bouncing the user out of the page. Hardware/gesture Back walks the page history
- * first and then closes the viewer (the activity's BackHandler routes that to model.back()).
+ * Published pages (the transcript and each AI review) open here, in a WebView, instead of in
+ * the device browser: Chrome cannot keep its GPU process alive on the R1, and when it dies
+ * Android falls back to the Home app (R1CORD), bouncing the user out of the page.
+ * Hardware/gesture Back walks the page history first and then closes the viewer (the
+ * activity's BackHandler routes that to model.back()).
  */
 @Composable
 internal fun SummaryViewer(url: String, model: R1cordViewModel) {
@@ -99,7 +100,7 @@ internal fun SummaryViewer(url: String, model: R1cordViewModel) {
             Modifier.fillMaxWidth().background(Panel).heightIn(min = 56.dp).padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = model::back, modifier = control("Close summary")) {
+            IconButton(onClick = model::back, modifier = control("Close page")) {
                 Icon(Icons.Default.Close, null, Modifier.size(28.dp), tint = White)
             }
             Text(
@@ -108,7 +109,7 @@ internal fun SummaryViewer(url: String, model: R1cordViewModel) {
                 fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp, maxLines = 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
             )
-            IconButton(onClick = ::retry, modifier = control("Reload summary")) {
+            IconButton(onClick = ::retry, modifier = control("Reload page")) {
                 Icon(Icons.Default.Refresh, null, Modifier.size(26.dp), tint = White)
             }
         }
@@ -155,23 +156,23 @@ internal fun SummaryViewer(url: String, model: R1cordViewModel) {
 
                                     override fun onReceivedError(view: WebView, request: WebResourceRequest, err: WebResourceError) {
                                         if (request.isForMainFrame) {
-                                            error = "Couldn't reach the summary page. Check the Wi-Fi connection and try again.\n\n${err.description}"
+                                            error = "Couldn't reach the page. Check the Wi-Fi connection and try again.\n\n${err.description}"
                                         }
                                     }
 
                                     override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
                                         if (!request.isForMainFrame) return
                                         error = if (response.statusCode == 404) {
-                                            "This summary isn't published yet. It can take a few minutes after sending; try again shortly.\n\nHTTP 404"
+                                            "This page isn't published yet. It can take a few minutes after sending; try again shortly.\n\nHTTP 404"
                                         } else {
-                                            "The server couldn't return the summary page.\n\nHTTP ${response.statusCode}"
+                                            "The server couldn't return the page.\n\nHTTP ${response.statusCode}"
                                         }
                                     }
 
                                     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, sslError: SslError) {
                                         handler.cancel()
                                         if (sslError.url == view.url || sslError.url == url) {
-                                            error = "The summary page's secure connection failed (certificate error)."
+                                            error = "The page's secure connection failed (certificate error)."
                                         }
                                     }
 
@@ -205,9 +206,9 @@ internal fun SummaryViewer(url: String, model: R1cordViewModel) {
                         fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp, textAlign = TextAlign.Center)
                     Text(message, color = Muted, fontSize = 17.sp, textAlign = TextAlign.Center)
                     Spacer(Modifier.height(4.dp))
-                    ActionButton("RETRY", "Retry loading summary", Icons.Default.Refresh, ::retry,
+                    ActionButton("RETRY", "Retry loading page", Icons.Default.Refresh, ::retry,
                         Modifier.fillMaxWidth(), primary = true)
-                    ActionButton("CLOSE", "Close summary", Icons.Default.Close, model::back, Modifier.fillMaxWidth())
+                    ActionButton("CLOSE", "Close page", Icons.Default.Close, model::back, Modifier.fillMaxWidth())
                 }
             }
         }

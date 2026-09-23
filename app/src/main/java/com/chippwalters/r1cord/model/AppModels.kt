@@ -8,6 +8,31 @@ package com.chippwalters.r1cord.model
  */
 enum class CaptureStatus { IDLE, STARTING, RECORDING, AUTO_LISTENING, PAUSED, STOPPING }
 data class PhotoItem(val id: String, val uri: String, val createdAt: Long)
+
+/** AI reviews the desktop server can write for a recording, in canonical order. */
+val REVIEW_KINDS = listOf("summary", "outline", "organized")
+
+/** Published page kinds in canonical (display) order: the transcript page, then one per review. */
+val PAGE_KINDS = listOf("transcript") + REVIEW_KINDS
+
+/** One page the desktop server published for a recording. */
+data class PublishedPage(val kind: String, val url: String)
+
+/**
+ * The pages of a recording from a server response. [pages] is null when the server sent none
+ * (servers before AI reviews): its single [webdavUrl] is then the one page. Those servers only
+ * publish `summary.html`; a newer server's predicted `<kind>.html` link keeps its own kind.
+ */
+fun resolvePages(pages: List<PublishedPage>?, webdavUrl: String?): List<PublishedPage> {
+    if (pages != null) return pages.filter { it.kind in PAGE_KINDS }.distinctBy { it.kind }.sortedBy { PAGE_KINDS.indexOf(it.kind) }
+    val url = webdavUrl?.takeIf { it.isNotBlank() } ?: return emptyList()
+    val named = url.substringBefore('?').substringAfterLast('/').removeSuffix(".html")
+    return listOf(PublishedPage(if (named in PAGE_KINDS) named else "summary", url))
+}
+
+/** The page "Open" shows after a send: the Summary page if there is one, else the first page. */
+fun List<PublishedPage>.primaryPage(): PublishedPage? = firstOrNull { it.kind == "summary" } ?: firstOrNull()
+
 data class RecordingItem(
     val id: String,
     val title: String,
@@ -19,7 +44,8 @@ data class RecordingItem(
     val waveform: List<Float> = emptyList(),
     val jobId: String? = null,
     val jobStatus: String = "local",
-    val webdavUrl: String? = null,
+    /** Published pages in canonical order; empty until the server reports any. */
+    val pages: List<PublishedPage> = emptyList(),
 )
 data class CaptureState(
     val recordingId: String? = null,
@@ -45,7 +71,7 @@ data class UploadUiState(
     val bytesTotal: Long,
     val phase: String,
 )
-data class SendResultUi(val recordingId: String, val webdavUrl: String?)
+data class SendResultUi(val recordingId: String, val pageUrl: String?)
 data class PairingUiState(
     val busy: Boolean = false,
     val error: String? = null,
@@ -70,7 +96,7 @@ data class AppUiState(
     val pairing: PairingUiState? = null,
     val paired: Boolean = false,
     val serverName: String = "",
-    /** Published summary page shown by the in-app viewer (Screen.VIEWER). */
+    /** Published page shown by the in-app viewer (Screen.VIEWER). */
     val viewerUrl: String? = null,
 ) {
     val selected: RecordingItem? get() = recordings.firstOrNull { it.id == selectedId }

@@ -1,5 +1,7 @@
 [brand-header]
 
+![chatgpt-image-sep-22-2026-06-59-03-pm](user-guide_images/chatgpt-image-sep-22-2026-06-59-03-pm.png?t=1790185017668)
+
 # R1CORD user guide
 
 R1CORD turns the Rabbit R1 into a pocket voice recorder. Press Start, talk, press Stop, play it back. It works with no internet, no account and no sign-in, and your recordings stay on the device until you copy them off.
@@ -16,12 +18,14 @@ Once your R1 is running Android, come back here.
 
 ## Installing R1CORD
 
-You need two things from the download folder:
+You need two things from the [R1CORD download folder](../README.md#downloads):
 
 | File | What it is |
 |---|---|
 | `R1CORD-<version>.apk` | The app, for the R1 |
 | `r1cord-server-<version>.zip` | The optional desktop companion, for a Windows PC (Mac and Linux coming soon) |
+
+Want the source code as well? R1CORD is open source: **[github.com/chippwalters/r1cord-public](https://github.com/chippwalters/r1cord-public)**.
 
 ### Put the app on the R1
 
@@ -105,7 +109,7 @@ Press the **gear** on the home screen. Settings cannot be opened while a recordi
 
 **Use WAV** — records uncompressed studio-quality audio instead of the normal compressed format. Files are about 7.4 times larger (roughly 346 MB per hour instead of 40 MB), so the remaining-time figure drops accordingly. Leave this off unless you specifically need it.
 
-**Desktop server** — for the optional computer companion: the **Server URL**, **Pair** / **Unpair**, and defaults for what should happen to a recording you send. The Server URL is the address your PC answers on over the internet or your Wi-Fi network; it is what **SEND** uses whenever the R1 has a working connection. Over the USB cable R1CORD finds the companion by itself, so there is nothing to set for that.
+**Desktop server** — for the optional computer companion: the **Server URL**, **Pair** / **Unpair**, and what a recording you send gets by default: which **AI reviews** to write, and whether to **Publish** them as web pages (see [AI reviews](#ai-reviews)). The Server URL is the address your PC answers on over the internet or your Wi-Fi network; it is what **SEND** uses whenever the R1 has a working connection. Over the USB cable R1CORD finds the companion by itself, so there is nothing to set for that.
 
 **Home app** — lets you choose a different home screen for the device.
 
@@ -122,21 +126,25 @@ Open **LIBRARY** and tap a recording. You get:
 - **−10** and **+10** to jump ten seconds,
 - any photos you attached,
 - **SEND**, **DELETE** and **DONE**,
-- **OPEN SUMMARY**, once the desktop companion has published a summary for it.
+- one button per page the desktop companion has published for it: **TRANSCRIPT**, **SUMMARY**, **OUTLINE**, **ORGANIZED**.
 
-**OPEN SUMMARY** shows the page inside R1CORD. The **OPEN** button in the "Sent" message and the notification that follows a send open the same view.
+Each page button opens that page inside R1CORD. The **OPEN** button in the "Sent" message and the notification that follows a send open the Summary, or the first page when there is no Summary.
 
-![Recording detail with the OPEN SUMMARY button](images/5c1e9a07/detail_open_summary.svg)
+![Recording detail with its page buttons](images/5c1e9a07/detail_pages.svg)
 
-1. **OPEN SUMMARY** — appears once the desktop companion has published a summary for this recording.
+1. **TRANSCRIPT** — everything that was said, word for word.
+2. **SUMMARY** — one of the AI reviews; only the reviews you asked for appear.
+3. **OUTLINE** — another review. **ORGANIZED** appears below it when the cleaned-up version was written.
 
-![A published summary open in R1CORD's viewer](images/5c1e9a07/summary_viewer.svg)
+Press **REFRESH** after sending to pick up pages as the companion finishes them.
+
+![A published page open in R1CORD's viewer](images/5c1e9a07/page_viewer.svg)
 
 1. **Close** — back to the recording. The R1's Back gesture steps back through any links you followed first, then closes.
 2. **Title** — the page's own title.
 3. **Reload** — fetch the page again, for example after the companion republished it.
 
-If the page cannot be loaded — no connection, or the summary is not published yet — the viewer says so and offers **RETRY**.
+If the page cannot be loaded — no connection, or it is not published yet — the viewer says so and offers **RETRY**.
 
 Nothing plays until you press PLAY — selecting a recording, or stopping one, never starts playback by itself.
 
@@ -173,6 +181,18 @@ Your recordings are ordinary files on the device. There are three ways to get th
 **1. Plug it in (with the desktop companion).** Approve the R1 once on your PC; from then on, plugging it in is all you do — the computer copies every finished recording across by itself and writes a transcript of each one. Nothing to press on the R1, no internet needed. See [Using the desktop companion](#using-the-desktop-companion).
 
 **2. Send over Wi-Fi (with the desktop companion).** Pair the R1 with your server once in Settings, then use **SEND** on a recording, or **SEND ALL** in the library. Turn Wi-Fi on from the quick-settings shade first — R1CORD never switches the radio on or off for you. If an upload is interrupted, the next attempt picks up where it left off.
+
+**SEND** asks what the companion should make of the recording:
+
+![The Send sheet](images/5c1e9a07/send_sheet.svg)
+
+1. **Summary** — a short abstract, the key points and any action items.
+2. **Outline** — the topics and points in the order they came up, as a nested list.
+3. **Organized** — the whole recording cleaned up: filler and false starts removed, grouped under headings, nothing left out.
+4. **Publish** — put the transcript and each review on the web as pages you can open from the R1.
+5. **SEND** — upload. Any combination of reviews works; with none, you get the transcript only.
+
+**SEND ALL** uses the defaults from Settings → Desktop server.
 
 **3. Copy the files yourself.** With Google's free Android platform-tools on your computer, and USB debugging enabled on the R1, one command copies everything:
 
@@ -218,20 +238,34 @@ Your recordings, transcripts and a log of each job are in:
 C:\Users\<you>\AppData\Local\R1CORD\data
 ```
 
-with each recording in its own folder: the audio, any photos, and `transcript.txt`. The **Recordings** list below the tiles has one row per recording, with its status and the writer that summarised it. Click a recording's name for its transcript, summary and log. Each row also gives you the audio without digging for that folder:
+with each recording in its own folder: the audio, any photos, and `transcript.txt`. The **Recordings** list below the tiles has one row per recording, with its status and the writer that wrote its reviews. Click a recording's name for its job details and log. Each row also gives you its pages and its audio without digging for that folder:
 
 ![The Recordings list on the companion's admin page](images/5c1e9a07/recent_jobs.svg)
 
-1. **Length** — how long the recording is.
-2. **Size** — how big the recording's audio file is.
-3. **Play** — plays the recording right there in the page; press it again to pause. While it plays, Length counts up.
-4. **Download** — saves a copy through the browser.
-5. **Folder** — opens the folder that holds it in File Explorer, in front of the browser, with the file selected.
-6. **Delete** — removes the recording from this PC, after you confirm: the audio, transcript, summary, published page and job history. The copy on the R1 is untouched, and the companion will not copy it back when you plug in again. Delete is greyed out while the recording is being processed.
+1. **Pages** — Transcript, Summary, Outline and Organized, as far as they exist. A name opens the published web page; one tagged *LOCAL* is not published and opens the same page from this PC instead. The **.md** beside each name downloads its Markdown.
+2. **Length** — how long the recording is.
+3. **Size** — how big the recording's audio file is.
+4. **Play** — plays the recording right there in the page; press it again to pause. While it plays, Length counts up.
+5. **Download** — saves a copy through the browser.
+6. **Folder** — opens the folder that holds it in File Explorer, in front of the browser, with the file selected.
+7. **Add review** — writes a review the recording does not have yet (or rewrites one) from the stored transcript, without re-uploading anything. It is published if the recording's pages were.
+8. **Delete** — removes the recording from this PC, after you confirm: the audio, transcript, reviews, published pages and job history. The copy on the R1 is untouched, and the companion will not copy it back when you plug in again. Delete and Add review are greyed out while the recording is being processed.
 
 Folder acts on the PC itself, so it only appears when the admin page is open on that PC. Play and Download work from anywhere you can open the admin page.
 
-The **System** page lists everything the companion depends on — speech recognition, the summary writers, USB mode, publishing, email and free disk space — each marked *OK*, *Needs attention* or *Not in use*, with a one-line detail. When the System tile at the top of the dashboard says something needs attention, click it to go there.
+The **System** page lists everything the companion depends on — speech recognition, the AI reviews writer, USB mode, publishing, email and free disk space — each marked *OK*, *Needs attention* or *Not in use*, with a one-line detail. When the System tile at the top of the dashboard says something needs attention, click it to go there.
+
+### AI reviews
+
+A coding-assistant CLI signed in on the PC (Claude Code, Codex or Grok Build) can rewrite each transcript three ways, in any combination:
+
+- **Summary** — an abstract, the key points and action items.
+- **Outline** — the topics and points in the order they were discussed, as a nested list.
+- **Cleaned up & organized** — everything that was said, with filler and false starts removed, grouped under headings. Nothing is summarised away.
+
+The R1 chooses per recording on its Send sheet. Recordings copied over USB, and imported folders, use the **Default reviews** on the admin page's Settings, under **AI reviews**. With **Publish** on, the transcript and each review become web pages in the recording's publish folder. Every page links to the recording's other pages at the top and has a **Download .md** button for its Markdown.
+
+Each review's instructions are in the same Settings section, one box per review, marked *Default* or *Custom*. Edit a box and **Save** to change what that review asks for; **Restore default** puts the original back. The companion always adds the fixed part itself — which file to write, the title, photos, the recording's date and length, and "never invent facts" — so an edit cannot break the page.
 
 ### The R1CORD icon in the taskbar
 
@@ -246,25 +280,26 @@ While the companion is running, the R1CORD logo sits in the notification area at
 5. **Quit R1CORD Server** — stops the companion until you start it again.
 6. **The icon** — the R1CORD logomark.
 
-When a job finishes, Windows shows a short notification: *Summary ready*, *Transcript ready* or *Job failed*.
+When a job finishes, Windows shows a short notification: *Transcript ready*, the review's name (*Summary ready*), *AI reviews ready* for several, or *Job failed*.
 
 Windows 11 hides new icons behind the **^** arrow at first. To keep R1CORD's in view, drag it from there onto the taskbar.
 
-### Getting each summary by email
+### Getting each review by email
 
-If the PC has Google's `gws` command-line tool installed and signed in to your Gmail, the companion can email you each finished job: the summary (or the transcript, for a transcribe-only job), plus a link to the published page. On the admin page's **Settings** page, fill in **email_to** and tick **email_enabled**; the **Email summary** button on any job's page sends one by hand. Email is off until you turn it on.
+If the PC has Google's `gws` command-line tool installed and signed in to your Gmail, the companion can email you each finished job: the Summary (or else the Organized version, the Outline, or the transcript), plus links to every published page. On the admin page's **Settings** page, fill in **email_to** and tick **email_enabled**; the **Email review** button on any job's page sends one by hand. Email is off until you turn it on.
 
 ### Settings worth knowing
 
 On the admin page's **Settings** page:
 
-- **What to do with new recordings** (`usb_auto_action`) — `transcribe` is the default. `archive` copies files without transcribing.
+- **What to do with new recordings** (`usb_auto_action`) — `transcribe` is the default. `review` also writes the default AI reviews; `publish` writes them and publishes the pages. `archive` copies files without transcribing.
 - **Speech model** (`asr_model`) — the default is the most accurate one and downloads about 1.6 GB the first time it runs. If transcription is too slow on your PC, choose `small` or `medium`.
 - **Where recordings are kept** (`datastore`) — point this at a drive with room if you record a lot.
 - **When the program runs** (`run_mode`) — by default it starts when you start it and shuts itself down about ten minutes after you unplug, so nothing sits running in the background. Set it to `always` if you would rather it stay on — you will want that if you send over Wi-Fi from elsewhere.
-- **Email** (`email_enabled`, `email_to`) — see [Getting each summary by email](#getting-each-summary-by-email).
+- **Page theme** (Settings → **Pages**) — the look of the pages, from the same twelve themes as the MD DOCS app, with a live preview. A new theme applies to pages made from then on; **Republish all pages** re-makes the published ones (**Preview republish** first shows what it would change).
+- **Email** (`email_enabled`, `email_to`) — see [Getting each review by email](#getting-each-review-by-email).
 
-Two further features exist for people who have the extra pieces: written **summaries** (needs a coding-assistant CLI installed and signed in on the PC) and **publishing** a formatted page (needs the MD DOCS app). Both are off unless you configure them, and neither is needed for transcripts.
+Two further features exist for people who have the extra pieces: **AI reviews** (needs a coding-assistant CLI installed and signed in on the PC) and **publishing** them as web pages (needs a folder your web host serves, set as `webdav_folder` and `public_url_base`; the companion makes the pages itself). Both are off unless you configure them, and neither is needed for transcripts.
 
 ### Sending over Wi-Fi instead
 

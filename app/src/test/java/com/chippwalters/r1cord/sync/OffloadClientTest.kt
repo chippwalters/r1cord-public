@@ -1,5 +1,6 @@
 package com.chippwalters.r1cord.sync
 
+import com.chippwalters.r1cord.model.PublishedPage
 import java.io.ByteArrayInputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -35,9 +36,8 @@ class OffloadClientTest {
         recordingId = "rec-1",
         createdAt = 1758400000000L,
         title = "Site visit",
-        summarize = true,
+        reviews = listOf("summary", "organized"),
         publish = false,
-        summaryStyle = "minutes",
         files = listOf(FileEntry("audio.m4a", 100L, "aa11"), FileEntry("photo-1.jpg", 10L, "bb22")),
     )
 
@@ -119,13 +119,24 @@ class OffloadClientTest {
         val sentJob = sent.getJSONObject("job")
         assertEquals("rec-1", sentJob.getString("recordingId"))
         assertEquals(1758400000000L, sentJob.getLong("createdAt"))
-        assertEquals("minutes", sentJob.getString("summaryStyle"))
+        assertEquals(listOf("summary", "organized"), sentJob.getJSONArray("reviews").let { a -> List(a.length()) { a.getString(it) } })
+        assertTrue("older servers must still summarize", sentJob.getBoolean("summarize"))
+        assertFalse("summaryStyle is deprecated and never sent", sentJob.has("summaryStyle"))
         val files = sentJob.getJSONArray("files")
         assertEquals(2, files.length())
         assertEquals("audio.m4a", files.getJSONObject(0).getString("name"))
         assertEquals(100L, files.getJSONObject(0).getLong("size"))
         assertEquals("aa11", files.getJSONObject(0).getString("sha256"))
         assertEquals("rec-1", sent.getJSONObject("metadata").getString("id"))
+    }
+
+    @Test
+    fun createJobWithNoReviewsTellsOlderServersNotToSummarize() {
+        server.enqueue(ok("""{"jobId":"job-1"}"""))
+        runBlocking { client().createJob(job.copy(reviews = emptyList()), """{"id":"rec-1"}""") }
+        val sentJob = JSONObject(server.takeRequest().body.readUtf8()).getJSONObject("job")
+        assertEquals(0, sentJob.getJSONArray("reviews").length())
+        assertFalse(sentJob.getBoolean("summarize"))
     }
 
     @Test
@@ -297,6 +308,53 @@ class OffloadClientTest {
         assertEquals("j3", list[2].jobId)
         assertEquals("https://ex/s.html", list[2].webdavUrl)
         assertNull(list[2].updatedAt)
+    }
+
+    @Test
+    fun recordingsParsesPagesInCanonicalOrderAndDropsUnusable() {
+        server.enqueue(
+            ok(
+                """[{"recordingId":"r1","status":"complete","webdavUrl":"https://ex/r1/summary.html","pages":[""" +
+                    """{"kind":"outline","url":"https://ex/r1/outline.html"},""" +
+                    """{"kind":"transcript","url":"https://ex/r1/transcript.html"},""" +
+                    """{"kind":"poem","url":"https://ex/r1/poem.html"},""" +
+                    """{"kind":"summary","url":null},""" +
+                    """{"kind":"organized","url":"https://ex/r1/organized.html"}]},""" +
+                    """{"recordingId":"r2","status":"processing","webdavUrl":"https://ex/r2/summary.html","pages":[]}]"""
+            )
+        )
+        val list = runBlocking { client().recordings() }
+        assertEquals(
+            listOf(
+                PublishedPage("transcript", "https://ex/r1/transcript.html"),
+                PublishedPage("outline", "https://ex/r1/outline.html"),
+                PublishedPage("organized", "https://ex/r1/organized.html"),
+            ),
+            list[0].pages,
+        )
+        assertEquals("an empty pages array means nothing is published yet", emptyList<PublishedPage>(), list[1].pages)
+    }
+
+    @Test
+    fun recordingsFromAnOlderServerTreatWebdavUrlAsTheSummaryPage() {
+        server.enqueue(
+            ok(
+                """[{"recordingId":"r1","status":"complete","webdavUrl":"https://ex/r1/summary.html"},""" +
+                    """{"recordingId":"r2","status":"complete","webdavUrl":"https://ex/r2/index.html"},""" +
+                    """{"recordingId":"r3","status":"processing","webdavUrl":null}]"""
+            )
+        )
+        val list = runBlocking { client().recordings() }
+        assertEquals(listOf(PublishedPage("summary", "https://ex/r1/summary.html")), list[0].pages)
+        assertEquals(listOf(PublishedPage("summary", "https://ex/r2/index.html")), list[1].pages)
+        assertEquals(emptyList<PublishedPage>(), list[2].pages)
+    }
+
+    @Test
+    fun jobResultWithoutPagesKeepsThePredictedLinkUnderItsOwnKind() {
+        server.enqueue(ok("""{"jobId":"job-1","status":"queued","webdavUrl":"https://ex/r1/transcript.html"}"""))
+        val committed = runBlocking { client().commit("job-1") }
+        assertEquals(listOf(PublishedPage("transcript", "https://ex/r1/transcript.html")), committed.pages)
     }
 
     // ---- route selection and URL validation ----

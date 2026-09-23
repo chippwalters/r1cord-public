@@ -14,6 +14,8 @@ import webbrowser
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from .config import PAGE_LABELS
+
 log = logging.getLogger("r1cord_server.tray")
 
 ICON_PATH = Path(__file__).resolve().parent / "static" / "r1cord-tray.png"
@@ -74,7 +76,12 @@ def finished_since(seen: dict[str, str], jobs: Iterable[Any]) -> list[tuple[str,
             continue
         name = job.title or job.recording_id
         if job.status == "complete":
-            what = "Summary ready" if job.summarize else "Transcript ready"
+            if not job.reviews:
+                what = "Transcript ready"
+            elif len(job.reviews) == 1:
+                what = f"{PAGE_LABELS[job.reviews[0]]} ready"
+            else:
+                what = "AI reviews ready"
             notes.append((what, _clip(name, NOTIFY_MESSAGE_MAX)))
         elif job.status == "error":
             # Job errors can carry a whole command line and CLI output; the first line says what failed.

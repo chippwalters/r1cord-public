@@ -1,20 +1,20 @@
-"""Email a finished job's summary through the Google Workspace CLI (`gws`), signed in on this PC."""
+"""Email a finished job's AI review through the Google Workspace CLI (`gws`), signed in on this PC."""
 
 from __future__ import annotations
 
 import base64
 import email.policy
 import json
-import re
 import shutil
 import subprocess
 from email.message import EmailMessage
+from html import escape
 from pathlib import Path
 from typing import Any, Callable
 
-import markdown
-
-from .config import Config
+from .config import PAGE_LABELS, Config
+from .render import render_fragment
+from .render.markdown import strip_brand_header
 from .store import JobStore
 
 # CreateProcess caps a command line at 32,767 characters; the message travels base64-encoded in
@@ -22,22 +22,10 @@ from .store import JobStore
 MAX_RAW_CHARS = 28_000
 SEND_TIMEOUT_S = 90
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_BRAND_HEADER = re.compile(r"^\s*\[brand-header\]\s*\n", re.IGNORECASE)
-_IMG = re.compile(r"<img\b[^>]*>", re.IGNORECASE)
-_RELATIVE_REF = re.compile(r'(\b(?:src|href)=")(?![a-z][a-z0-9+.-]*:|#|/)([^"]+)"', re.IGNORECASE)
-_NOT_AN_ENTITY = re.compile(r"&(?![A-Za-z][A-Za-z0-9]{1,31};|#\d{1,10};|#x[0-9A-Fa-f]{1,8};)")
 
 
-def _escape_raw_html(md: str) -> str:
-    """Neutralize raw HTML in the markdown source before it is rendered.
-
-    Summaries and transcripts are LLM-written text that reaches an HTML email part;
-    python-markdown passes embedded HTML through verbatim, so anything that looks
-    like a tag is shown as text instead. Only `<` is escaped (a bare `>` cannot
-    open a tag, and `>` at line start is blockquote syntax), and `&` only when it
-    is not already an entity reference.
-    """
-    return _NOT_AN_ENTITY.sub("&amp;", md).replace("<", "&lt;")
+# The review an email carries, best first; the transcript when there is none.
+EMAIL_ORDER = ("summary", "organized", "outline")
 
 
 class MailError(Exception):
@@ -68,19 +56,20 @@ def compose(
     *,
     to: str,
     title: str,
-    summary_md: str | None,
+    review_md: str | None,
     transcript: str | None,
-    page_url: str | None,
+    pages: list[dict[str, str]],
     job_url: str,
 ) -> EmailMessage:
-    """Subject = title; body = the summary (or the transcript when there is no summary) + links."""
-    if summary_md is not None:
-        body_md = _BRAND_HEADER.sub("", summary_md, count=1).strip()
+    """Subject = title; body = the review (or the transcript when there is none) + a link to every
+    published page (`[{"kind", "url"}]`, page order) and to the job."""
+    if review_md is not None:
+        body_md = strip_brand_header(review_md).strip()
     elif transcript is not None:
         body_md = transcript.strip()
     else:
-        raise MailError("nothing to email: no summary or transcript yet")
-    links = [("Published page", page_url)] if page_url else []
+        raise MailError("nothing to email: no AI review or transcript yet")
+    links = [(f"{PAGE_LABELS.get(p['kind'], p['kind'])} page", p["url"]) for p in pages]
     links.append(("Job on the server PC", job_url))
 
     msg = _message(to, title, body_md, links, html=True)
@@ -106,14 +95,10 @@ def _message(to: str, title: str, body_md: str, links: list[tuple[str, str]], *,
     text_links = "\n".join(f"{label}: {url}" for label, url in links)
     msg.set_content(f"{body_md}\n\n{text_links}\n")
     if html:
-        page_url = links[0][1] if links[0][0] == "Published page" else None
-        rendered = markdown.markdown(_escape_raw_html(body_md), extensions=["extra", "sane_lists"])
-        if page_url:
-            base = page_url.rsplit("/", 1)[0] + "/"
-            rendered = _RELATIVE_REF.sub(lambda m: f'{m.group(1)}{base}{m.group(2)}"', rendered)
-        else:
-            rendered = _IMG.sub("", rendered)  # photo paths only resolve on the published page
-        link_html = "".join(f'<p><a href="{url}">{label}</a></p>' for label, url in links)
+        # The pages' Markdown rules: raw HTML shows as text, links only to http(s), mailto and
+        # anchors, photos become their captions (they only resolve on the published page).
+        rendered = render_fragment(body_md)
+        link_html = "".join(f'<p><a href="{escape(url)}">{escape(label)}</a></p>' for label, url in links)
         msg.add_alternative(
             '<div style="font-family:Segoe UI,Arial,sans-serif;font-size:15px;line-height:1.5;'
             f'max-width:680px">{rendered}<hr>{link_html}</div>',
@@ -165,7 +150,8 @@ def email_job(
     *,
     run: Callable[..., Any] = subprocess.run,
 ) -> str:
-    """Email one job's summary to `config.email_to`, log it to the job, return the Gmail id."""
+    """Email one recording's best review (summary, else organized, else outline, else the transcript)
+    to `config.email_to`, log it to the job, return the Gmail id."""
     to = config.email_to.strip()
     if not to:
         raise MailError("no recipient: set email_to on the Config page")
@@ -173,15 +159,14 @@ def email_job(
     if rec is None:
         raise MailError(f"unknown job {job_id}")
     outbox = store.outbox_dir(rec.recording_id)
-    summary = outbox / "summary.md"
+    review = next((outbox / f"{k}.md" for k in EMAIL_ORDER if (outbox / f"{k}.md").is_file()), None)
     transcript = outbox / "transcript.txt"
-    result = store.result_json(job_id)
     msg = compose(
         to=to,
         title=rec.title or rec.recording_id,
-        summary_md=summary.read_text(encoding="utf-8") if summary.is_file() else None,
+        review_md=review.read_text(encoding="utf-8") if review is not None else None,
         transcript=transcript.read_text(encoding="utf-8") if transcript.is_file() else None,
-        page_url=result.get("webdavUrl") or None,
+        pages=store.pages(rec),
         job_url=f"http://127.0.0.1:{config.listen_port}/admin/jobs/{job_id}",
     )
     message_id = send(config, msg, run=run)

@@ -5,6 +5,9 @@ import json
 import time
 from pathlib import Path
 
+import sqlite3
+from dataclasses import replace
+
 import pytest
 
 from r1cord_server import store as store_module
@@ -46,9 +49,8 @@ def _request(recording_id: str, spec: FileSpec, title: str = "Site visit") -> Jo
         recording_id=recording_id,
         created_at_ms=1_758_400_000_000,
         title=title,
-        summarize=True,
+        reviews=("summary",),
         publish=True,
-        summary_style="notes",
         files=(spec,),
     )
 
@@ -144,7 +146,7 @@ def test_import_folder(tmp_path: Path) -> None:
         '{"schemaVersion":1,"id":"rec-drop","title":"Dropped","createdAt":1758400000000}',
         encoding="utf-8",
     )
-    rec = store.import_folder(src, title=None, summarize=True, publish=False, style="notes")
+    rec = store.import_folder(src, title=None, reviews=("summary",), publish=False)
     assert rec.recording_id == "rec-drop"
     assert rec.status == "queued"
     assert rec.title == "Dropped"
@@ -160,9 +162,8 @@ def _valid_request(spec: FileSpec, **overrides: object) -> JobRequest:
         recording_id="rec-v",
         created_at_ms=1_758_400_000_000,
         title="Site visit",
-        summarize=True,
+        reviews=("summary",),
         publish=False,
-        summary_style="notes",
         files=(spec,),
     )
     base.update(overrides)
@@ -176,7 +177,7 @@ def test_create_job_rejects_bad_requests(tmp_path: Path) -> None:
     cases: list[tuple[str, JobRequest, str]] = [
         ("empty title", _valid_request(spec, title="   "), "title"),
         ("long title", _valid_request(spec, title="x" * 121), "title"),
-        ("bad style", _valid_request(spec, summary_style="poem"), "summaryStyle"),
+        ("unknown review", _valid_request(spec, reviews=("summary", "poem")), "unknown review"),
         ("empty recording id", _valid_request(spec, recording_id=""), "recordingId"),
         ("slash in id", _valid_request(spec, recording_id="a/b"), "recordingId"),
         ("backslash in id", _valid_request(spec, recording_id="a\\b"), "recordingId"),
@@ -432,16 +433,16 @@ def test_retry_writer_from_terminal_and_error(tmp_path: Path) -> None:
 
 
 def test_retry_publish_contract(tmp_path: Path) -> None:
-    """retry-publish is allowed whenever a summary.md exists (offload-api-v1)."""
+    """retry-publish is allowed once there is a page to publish: a transcript or any AI review."""
     store = JobStore(_cfg(tmp_path))
     with pytest.raises(UnknownJob):
         store.retry_publish("no-such-job")
 
     rec = _finished_job(store, "rec-retry", "error")
-    with pytest.raises(RetryNotAllowed, match="summary.md is missing"):
+    with pytest.raises(RetryNotAllowed, match="nothing to publish"):
         store.retry_publish(rec.job_id)
 
-    (store.outbox_dir("rec-retry") / "summary.md").write_text("# Summary", encoding="utf-8")
+    (store.outbox_dir("rec-retry") / "outline.md").write_text("# Outline", encoding="utf-8")
     retried = store.retry_publish(rec.job_id)
     assert retried.status == "queued"
     assert retried.skip_asr is True and retried.only_publish is True
@@ -462,22 +463,22 @@ def _write_drop(folder: Path, recording_id: str, *, title: str = "Dropped", crea
 def test_import_folder_error_paths(tmp_path: Path) -> None:
     store = JobStore(_cfg(tmp_path))
     with pytest.raises(FileNotFoundError):
-        store.import_folder(tmp_path / "missing", title=None, summarize=True, publish=False, style="notes")
+        store.import_folder(tmp_path / "missing", title=None, reviews=("summary",), publish=False)
 
     empty = tmp_path / "empty"
     empty.mkdir()
     with pytest.raises(FileNotFoundError, match="metadata.json"):
-        store.import_folder(empty, title=None, summarize=True, publish=False, style="notes")
+        store.import_folder(empty, title=None, reviews=("summary",), publish=False)
 
     no_id = tmp_path / "no-id"
     _write_drop(no_id, "")
     with pytest.raises(ValueError, match="missing id"):
-        store.import_folder(no_id, title=None, summarize=True, publish=False, style="notes")
+        store.import_folder(no_id, title=None, reviews=("summary",), publish=False)
 
     escape = tmp_path / "escape"
     _write_drop(escape, "..")
     with pytest.raises(ValueError, match="recordingId"):
-        store.import_folder(escape, title=None, summarize=True, publish=False, style="notes")
+        store.import_folder(escape, title=None, reviews=("summary",), publish=False)
     assert not (tmp_path / "ds" / "audio.wav").exists()  # nothing copied outside inbox/
 
     not_object = tmp_path / "not-object"
@@ -485,24 +486,24 @@ def test_import_folder_error_paths(tmp_path: Path) -> None:
     (not_object / "audio.wav").write_bytes(b"x")
     (not_object / "metadata.json").write_text("[]", encoding="utf-8")
     with pytest.raises(ValueError, match="not an object"):
-        store.import_folder(not_object, title=None, summarize=True, publish=False, style="notes")
+        store.import_folder(not_object, title=None, reviews=("summary",), publish=False)
 
     no_audio = tmp_path / "no-audio"
     no_audio.mkdir()
     (no_audio / "metadata.json").write_text('{"id":"rec-noaudio"}', encoding="utf-8")
     with pytest.raises(ValueError, match="exactly one"):
-        store.import_folder(no_audio, title=None, summarize=True, publish=False, style="notes")
+        store.import_folder(no_audio, title=None, reviews=("summary",), publish=False)
 
     two_audios = tmp_path / "two-audios"
     _write_drop(two_audios, "rec-two")
     (two_audios / "audio.m4a").write_bytes(b"second-audio")
     with pytest.raises(ValueError, match="exactly one"):
-        store.import_folder(two_audios, title=None, summarize=True, publish=False, style="notes")
+        store.import_folder(two_audios, title=None, reviews=("summary",), publish=False)
 
-    bad_style = tmp_path / "bad-style"
-    _write_drop(bad_style, "rec-style")
-    with pytest.raises(ValueError, match="invalid style"):
-        store.import_folder(bad_style, title=None, summarize=True, publish=False, style="poem")
+    bad_review = tmp_path / "bad-review"
+    _write_drop(bad_review, "rec-review")
+    with pytest.raises(ValueError, match="unknown review"):
+        store.import_folder(bad_review, title=None, reviews=("poem",), publish=False)
 
 
 def test_import_folder_metadata_variants(tmp_path: Path) -> None:
@@ -510,31 +511,31 @@ def test_import_folder_metadata_variants(tmp_path: Path) -> None:
 
     explicit = tmp_path / "explicit"
     _write_drop(explicit, "rec-meta1", title="From Metadata")
-    rec = store.import_folder(explicit, title=None, summarize=True, publish=False, style="minutes")
+    rec = store.import_folder(explicit, title=None, reviews=("organized", "summary", "organized"), publish=False)
     assert rec.title == "From Metadata"
     assert rec.created_at_ms == 1_758_400_000_000
-    assert rec.summary_style == "minutes"
+    assert rec.reviews == ("summary", "organized")  # canonical order, duplicates dropped
     assert (store.inbox_dir("rec-meta1") / "metadata.json").is_file()
 
     override = tmp_path / "override"
     _write_drop(override, "rec-meta2", title="Ignored")
-    rec = store.import_folder(override, title="Kept", summarize=False, publish=False, style="notes")
-    assert rec.title == "Kept" and rec.summarize is False
+    rec = store.import_folder(override, title="Kept", reviews=(), publish=False)
+    assert rec.title == "Kept" and rec.reviews == ()
 
     fallback = tmp_path / "fallback"
     _write_drop(fallback, "rec-meta3", title="   ")
-    rec = store.import_folder(fallback, title=None, summarize=True, publish=False, style="notes")
+    rec = store.import_folder(fallback, title=None, reviews=("summary",), publish=False)
     assert rec.title == "recording"
 
     long_title = tmp_path / "long"
     _write_drop(long_title, "rec-meta4", title="t" * 500)
-    rec = store.import_folder(long_title, title=None, summarize=True, publish=False, style="notes")
+    rec = store.import_folder(long_title, title=None, reviews=("summary",), publish=False)
     assert len(rec.title) == 120
 
     no_created = tmp_path / "no-created"
     _write_drop(no_created, "rec-meta5", created=0)
     before_ms = int(time.time() * 1000)
-    rec = store.import_folder(no_created, title=None, summarize=True, publish=False, style="notes")
+    rec = store.import_folder(no_created, title=None, reviews=("summary",), publish=False)
     assert before_ms - 60_000 <= rec.created_at_ms <= int(time.time() * 1000) + 60_000
 
 
@@ -546,25 +547,28 @@ def test_import_folder_includes_photos_and_ignores_others(tmp_path: Path) -> Non
     (src / "photo-a.jpg").write_bytes(b"pa")
     (src / "photo-c.gif").write_bytes(b"pc")  # wrong extension: ignored
     (src / "notes.txt").write_text("x", encoding="utf-8")  # stray file: ignored
-    rec = store.import_folder(src, title=None, summarize=True, publish=False, style="notes")
+    rec = store.import_folder(src, title=None, reviews=("summary",), publish=False)
     names = [f.name for f in rec.files]
     assert names == ["audio.wav", "photo-a.jpg", "photo-b.jpg"]  # sorted after audio
 
 
 def test_process_inbox_actions(tmp_path: Path) -> None:
-    store = JobStore(_cfg(tmp_path))
-    for rid, action, summarize, publish in [
-        ("rec-act1", "transcribe", False, False),
-        ("rec-act2", "summarize", True, False),
-        ("rec-act3", "publish", True, True),
+    cfg = _cfg(tmp_path)
+    store = JobStore(replace(cfg, default_reviews=("outline", "organized")))
+    for rid, action, reviews, publish in [
+        ("rec-act1", "transcribe", (), False),
+        ("rec-act2", "review", ("outline", "organized"), False),
+        ("rec-act3", "publish", ("outline", "organized"), True),
     ]:
         _write_drop(store.inbox_dir(rid), rid, title=f"USB {rid}")
         rec = store.process_inbox(rid, action=action)
         assert rec.status == "queued"
-        assert rec.summarize is summarize and rec.publish is publish
+        assert rec.reviews == reviews and rec.publish is publish
         assert rec.title == f"USB {rid}"
     with pytest.raises(ValueError, match="invalid action"):
         store.process_inbox("rec-act4", action="archive")
+    with pytest.raises(ValueError, match="invalid action"):
+        store.process_inbox("rec-act4", action="summarize")
     with pytest.raises(ValueError, match="invalid action"):
         store.process_inbox("rec-act4", action="detonate")
 
@@ -772,3 +776,97 @@ def test_latest_jobs_lists_each_recording_once_with_its_run_count(tmp_path: Path
     only_b = _finished_job(store, "rec-b", "error")
     rows = {job.recording_id: (job.job_id, runs) for job, runs in store.latest_jobs()}
     assert rows == {"rec-a": (newest_a.job_id, 2), "rec-b": (only_b.job_id, 1)}
+
+
+# --- AI reviews ------------------------------------------------------------------
+
+
+def test_database_from_before_ai_reviews_is_migrated(tmp_path: Path) -> None:
+    """A jobs row written by the summarize/summaryStyle server opens with reviews filled in."""
+    cfg = _cfg(tmp_path)
+    Path(cfg.datastore).mkdir(parents=True)
+    old = sqlite3.connect(str(Path(cfg.datastore) / "index.sqlite"))
+    old.executescript(
+        """
+        CREATE TABLE jobs (
+            job_id TEXT PRIMARY KEY, recording_id TEXT, status TEXT, error TEXT, title TEXT,
+            summarize INTEGER, publish INTEGER, summary_style TEXT, writer TEXT, webdav_url TEXT,
+            publish_folder TEXT, skip_asr INTEGER DEFAULT 0, only_publish INTEGER DEFAULT 0,
+            created_at TEXT, updated_at TEXT, finished_at TEXT, asr_json TEXT, timings_json TEXT
+        );
+        """
+    )
+    folder = str(Path(cfg.webdav_folder) / "2025" / "09" / "20250920-1013-old")
+    for job_id, summarize in (("j-sum", 1), ("j-txt", 0)):
+        old.execute(
+            "INSERT INTO jobs VALUES (?, ?, 'complete', NULL, 'Old', ?, 1, 'minutes', 'codex', "
+            "'https://stale.test/x/summary.html', ?, 0, 0, '2025-09-20T10:13:00Z', "
+            "'2025-09-20T10:20:00Z', '2025-09-20T10:20:00Z', NULL, NULL)",
+            (job_id, f"rec-{job_id}", summarize, folder),
+        )
+    old.commit()
+    old.close()
+
+    store = JobStore(cfg)
+    summarized, plain = store.job("j-sum"), store.job("j-txt")
+    assert summarized is not None and summarized.reviews == ("summary",)
+    assert plain is not None and plain.reviews == ()
+    result = store.result_json("j-sum")
+    assert result["reviews"] == ["summary"] and "summarize" not in result and "summaryStyle" not in result
+    assert result["webdavUrl"] == "https://example.test/files/2025/09/20250920-1013-old/summary.html"
+    assert store.result_json("j-txt")["webdavUrl"].endswith("/transcript.html")
+    columns = {r[1] for r in store._conn.execute("PRAGMA table_info(jobs)")}
+    assert {"summarize", "summary_style", "webdav_url"}.isdisjoint(columns)
+    JobStore(cfg)  # opening a migrated database again is a no-op
+
+
+def test_result_and_index_list_published_pages_in_page_order(tmp_path: Path) -> None:
+    store = JobStore(_cfg(tmp_path))
+    rec = _finished_job(store, "rec-pages", "complete")
+    assert store.result_json(rec.job_id)["pages"] == []
+    folder = Path(rec.publish_folder)
+    folder.mkdir(parents=True)
+    for name in ("outline.html", "transcript.html", "summary.md"):
+        (folder / name).write_text("x", encoding="utf-8")
+    base = rec.webdav_url.rsplit("/", 1)[0]
+    expected = [
+        {"kind": "transcript", "url": f"{base}/transcript.html"},
+        {"kind": "outline", "url": f"{base}/outline.html"},
+    ]
+    assert store.result_json(rec.job_id)["pages"] == expected
+    (entry,) = store.recordings_index()
+    assert entry.pages == expected
+
+
+def test_retry_writer_reviews_default_to_the_job_and_can_be_replaced(tmp_path: Path) -> None:
+    store = JobStore(_cfg(tmp_path))
+    rec = _finished_job(store, "rec-rr", "complete")
+    (store.outbox_dir("rec-rr") / "transcript.txt").write_text("hello", encoding="utf-8")
+    assert store.retry_writer(rec.job_id, None).reviews == ("summary",)
+    store.set_status(rec.job_id, "complete")
+    assert store.retry_writer(rec.job_id, None, ["organized", "outline"]).reviews == ("outline", "organized")
+    store.set_status(rec.job_id, "complete")
+    with pytest.raises(ValueError, match="at least one"):
+        store.retry_writer(rec.job_id, None, [])
+    with pytest.raises(ValueError, match="unknown review"):
+        store.retry_writer(rec.job_id, None, ["poem"])
+
+
+def test_add_review_queues_a_writer_only_job_that_follows_the_latest_publish(tmp_path: Path) -> None:
+    store = JobStore(_cfg(tmp_path))
+    first = _finished_job(store, "rec-add", "complete")  # publish=False in _valid_request
+    with pytest.raises(StoreError, match="no transcript"):
+        store.add_review("rec-add", "outline")
+    (store.outbox_dir("rec-add") / "transcript.txt").write_text("hello", encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown review"):
+        store.add_review("rec-add", "poem")
+
+    added = store.add_review("rec-add", "outline")
+    assert added.job_id != first.job_id and added.status == "queued"
+    assert added.reviews == ("outline",) and added.skip_asr and not added.only_publish
+    assert added.publish is False and added.publish_folder == first.publish_folder
+    assert store.next_queued().job_id == added.job_id
+    with pytest.raises(StoreError, match="still running"):
+        store.add_review("rec-add", "summary")
+    with pytest.raises(StoreError, match="unknown recording"):
+        store.add_review("rec-none", "summary")

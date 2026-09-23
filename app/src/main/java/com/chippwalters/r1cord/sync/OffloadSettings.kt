@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.chippwalters.r1cord.model.REVIEW_KINDS
 
 /**
  * Desktop-server preferences. Plain keys share "app_preferences" with RecorderSettings;
@@ -13,13 +14,13 @@ object OffloadSettings {
     private const val PREFS = "app_preferences"
     private const val SECURE_PREFS = "offload_secure"
     private const val KEY_SERVER_URL = "offload_server_url"
-    private const val KEY_DEFAULT_SUMMARIZE = "offload_default_summarize"
+    private const val KEY_DEFAULT_REVIEWS = "offload_default_reviews"
     private const val KEY_DEFAULT_PUBLISH = "offload_default_publish"
-    private const val KEY_DEFAULT_STYLE = "offload_default_style"
     private const val KEY_SERVER_NAME = "offload_server_name"
     private const val KEY_TOKEN = "token"
-    private const val STYLE_NOTES = "notes"
-    private val STYLES = setOf("notes", "minutes", "article")
+    /** 0.3.2 and earlier stored a Summarize switch and a summary style; the switch seeds the reviews once. */
+    private const val LEGACY_SUMMARIZE = "offload_default_summarize"
+    private const val LEGACY_STYLE = "offload_default_style"
 
     @Volatile private var securePrefs: SharedPreferences? = null
 
@@ -29,26 +30,26 @@ object OffloadSettings {
         prefs(context).edit().putString(KEY_SERVER_URL, url.trim()).apply()
     }
 
-    fun defaultSummarize(context: Context): Boolean = prefs(context).getBoolean(KEY_DEFAULT_SUMMARIZE, true)
+    /** AI reviews the Send sheet starts with, in canonical order. */
+    fun defaultReviews(context: Context): List<String> {
+        val prefs = prefs(context)
+        val stored = prefs.getStringSet(KEY_DEFAULT_REVIEWS, null)
+            ?: return if (prefs.getBoolean(LEGACY_SUMMARIZE, true)) listOf("summary") else emptyList()
+        return REVIEW_KINDS.filter { it in stored }
+    }
 
-    fun setDefaultSummarize(context: Context, enabled: Boolean) {
-        prefs(context).edit().putBoolean(KEY_DEFAULT_SUMMARIZE, enabled).apply()
+    fun setDefaultReviews(context: Context, reviews: Collection<String>) {
+        prefs(context).edit()
+            .putStringSet(KEY_DEFAULT_REVIEWS, REVIEW_KINDS.filter { it in reviews }.toSet())
+            .remove(LEGACY_SUMMARIZE)
+            .remove(LEGACY_STYLE)
+            .apply()
     }
 
     fun defaultPublish(context: Context): Boolean = prefs(context).getBoolean(KEY_DEFAULT_PUBLISH, true)
 
     fun setDefaultPublish(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_DEFAULT_PUBLISH, enabled).apply()
-    }
-
-    fun defaultStyle(context: Context): String {
-        val value = prefs(context).getString(KEY_DEFAULT_STYLE, STYLE_NOTES) ?: STYLE_NOTES
-        return if (value in STYLES) value else STYLE_NOTES
-    }
-
-    fun setDefaultStyle(context: Context, style: String) {
-        val value = if (style in STYLES) style else STYLE_NOTES
-        prefs(context).edit().putString(KEY_DEFAULT_STYLE, value).apply()
     }
 
     fun serverName(context: Context): String = prefs(context).getString(KEY_SERVER_NAME, "") ?: ""

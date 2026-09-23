@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_page_links.html" import page_links %}
 {% block title %}Recordings — R1CORD Server{% endblock %}
 {# Reloading is done by the script below, so a recording that is playing is not cut off. #}
 {% block refresh %}{% endblock %}
@@ -59,11 +60,14 @@
         <td class="rec">
           <a class="rec-title" href="/admin/jobs/{{ j.job_id }}">{{ j.title or j.recording_id }}</a>
           <span class="rec-id">{{ j.recording_id }}{% if r.runs > 1 %} · {{ r.runs }} runs{% endif %}</span>
+          {% if r.pages %}
+          <span class="rec-pages">{{ page_links(r.pages) }}</span>
+          {% endif %}
         </td>
         <td class="num len" data-len="{{ r.duration or '—' }}">{{ r.duration or "—" }}</td>
         <td class="num">{{ r.size or "—" }}</td>
         <td><span class="pill pill-{{ r.status_tone }}" {% if j.error %}title="{{ j.error.splitlines()[0] }}"{% endif %}>{{ r.status_label }}</span></td>
-        <td class="mono-cell">{{ j.writer if j.summarize else "—" }}</td>
+        <td class="mono-cell">{{ j.writer if j.reviews else "—" }}</td>
         <td class="mono-cell">{{ r.updated }}</td>
         <td class="actions">
           {% if r.has_audio %}
@@ -76,14 +80,32 @@
           {% endif %}
           {% endif %}
           {% if r.status_tone in ("work", "idle") %}
+          <span class="icon-btn icon-btn-disabled" title="Busy — wait for the job to finish" aria-label="Add review unavailable"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2.5h2v4.5h4.5v2H9v4.5H7V9H2.5V7H7z"/></svg></span>
+          {% elif not r.has_transcript %}
+          <span class="icon-btn icon-btn-disabled" title="No transcript yet — nothing to review" aria-label="Add review unavailable"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2.5h2v4.5h4.5v2H9v4.5H7V9H2.5V7H7z"/></svg></span>
+          {% else %}
+          <details class="confirm menu">
+            <summary class="icon-btn" title="Add an AI review" aria-label="Add review"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 2.5h2v4.5h4.5v2H9v4.5H7V9H2.5V7H7z"/></svg></summary>
+            <div class="confirm-pop">
+              <p>Add an AI review of <strong>{{ j.title or j.recording_id }}</strong></p>
+              <form method="post" action="/admin/recordings/{{ j.recording_id }}/reviews" class="review-menu" data-busy>
+                {% for c in r.reviews %}
+                <button type="submit" name="kind" value="{{ c.kind }}" class="btn btn-secondary btn-small">{{ c.verb }} {{ c.label }}</button>
+                {% endfor %}
+              </form>
+              <p class="muted">Written from the transcript by {{ config.default_writer if config.default_writer != "none" else j.writer }}{% if j.publish %}, then published{% endif %}.</p>
+            </div>
+          </details>
+          {% endif %}
+          {% if r.status_tone in ("work", "idle") %}
           <span class="icon-btn icon-btn-disabled" title="Busy — wait for the job to finish" aria-label="Delete unavailable"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1.5h4l.6 1H14v1.8H2V2.5h3.4zM3.3 5.2h9.4l-.7 9.3H4z"/></svg></span>
           {% else %}
           <details class="confirm">
             <summary class="icon-btn icon-btn-danger" title="Delete from this PC" aria-label="Delete"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1.5h4l.6 1H14v1.8H2V2.5h3.4zM3.3 5.2h9.4l-.7 9.3H4z"/></svg></summary>
             <div class="confirm-pop">
               <p>Delete <strong>{{ j.title or j.recording_id }}</strong> from this PC?</p>
-              <p class="muted">Audio, transcript, summary, published page and job history are removed. The R1 keeps its copy, and USB mode will not copy it back.</p>
-              <form method="post" action="/admin/recordings/{{ j.recording_id }}/delete">
+              <p class="muted">Audio, transcript, AI reviews, published pages and job history are removed. The R1 keeps its copy, and USB mode will not copy it back.</p>
+              <form method="post" action="/admin/recordings/{{ j.recording_id }}/delete" data-busy>
                 <button type="submit" class="btn btn-danger btn-small">Delete recording</button>
               </form>
             </div>

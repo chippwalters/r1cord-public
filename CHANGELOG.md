@@ -3,6 +3,26 @@
 Versions are the app's `versionName`; the desktop companion carries its own version in
 `server/pyproject.toml` and is noted where it changed.
 
+## 0.3.3 (beta) — AI reviews, Transcript pages, server-rendered pages with themes (companion 0.3.3)
+
+This is a **beta** release of both the app and the desktop companion. A new cross-platform
+architecture for the companion (Windows, macOS and Linux) is coming soon.
+
+- **Three AI reviews, in any combination:** Summary, Outline, and Cleaned up & organized (the
+  whole recording without filler, grouped under headings). Chosen per send on the R1, with
+  defaults in Settings; the Notes / Minutes / Article styles are replaced.
+- **Transcript page.** With Publish on, the transcript is published too, beside one page per
+  review. The R1's recording screen shows a button for each page, opening in the in-app viewer.
+- **Companion dashboard:** page links under each recording (unpublished ones open a local
+  preview), and **Add review** to write another review from the stored transcript without
+  re-uploading.
+- **Editable prompts:** Settings → AI reviews has each review's prompt with Restore default.
+- One failed review no longer stops the others.
+- **The companion makes the web pages itself** — the MD DOCS app is no longer needed to publish.
+  Every page links the recording's other pages and offers its Markdown as a download. Choose the
+  look from twelve themes (the same set as MD DOCS) under Settings → Pages, with a preview;
+  **Republish all pages** re-makes pages already published.
+
 ## Companion 0.3.2 — Play in the page; Folder opens in front
 
 - **Play** now plays a recording right in the admin page (press again to pause; Length counts up),

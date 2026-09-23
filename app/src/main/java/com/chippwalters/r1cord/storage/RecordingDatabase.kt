@@ -11,7 +11,11 @@ import androidx.room.Query
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.chippwalters.r1cord.model.PublishedPage
+import com.chippwalters.r1cord.model.resolvePages
 import kotlinx.coroutines.flow.Flow
+import org.json.JSONArray
+import org.json.JSONObject
 
 @Entity(tableName = "recordings")
 internal data class RecordingRow(
@@ -28,6 +32,8 @@ internal data class RecordingRow(
     val jobStatus: String = "local",
     val webdavUrl: String? = null,
     val sentAt: Long? = null,
+    /** Published pages as a JSON array of {kind,url} in canonical order (see encodePages). */
+    val pages: String = "[]",
 )
 
 @Entity(
@@ -60,10 +66,10 @@ internal interface RecordingDao {
     @Query("UPDATE photos SET status = :status WHERE id = :id") suspend fun photoStatus(id: String, status: String)
     @Query("DELETE FROM recordings WHERE id = :id") suspend fun delete(id: String)
     @Query("DELETE FROM photos WHERE id = :id") suspend fun deletePhoto(id: String)
-    @Query("UPDATE recordings SET jobId = :jobId, jobStatus = :jobStatus, webdavUrl = :webdavUrl, sentAt = :sentAt WHERE id = :id")
-    suspend fun updateJob(id: String, jobId: String?, jobStatus: String, webdavUrl: String?, sentAt: Long?)
-    @Query("UPDATE recordings SET jobStatus = :jobStatus, webdavUrl = :webdavUrl WHERE id = :id")
-    suspend fun updateJobStatus(id: String, jobStatus: String, webdavUrl: String?)
+    @Query("UPDATE recordings SET jobId = :jobId, jobStatus = :jobStatus, webdavUrl = :webdavUrl, pages = :pages, sentAt = :sentAt WHERE id = :id")
+    suspend fun updateJob(id: String, jobId: String?, jobStatus: String, webdavUrl: String?, pages: String, sentAt: Long?)
+    @Query("UPDATE recordings SET jobStatus = :jobStatus, webdavUrl = :webdavUrl, pages = :pages WHERE id = :id")
+    suspend fun updateJobStatus(id: String, jobStatus: String, webdavUrl: String?, pages: String)
 }
 
 internal val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -75,7 +81,28 @@ internal val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
-@Database(entities = [RecordingRow::class, PhotoRow::class], version = 2, exportSchema = false)
+/** Adds the published pages; a recording sent before AI reviews keeps its one link as its Summary page. */
+internal val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE recordings ADD COLUMN pages TEXT NOT NULL DEFAULT '[]'")
+        db.query("SELECT id, webdavUrl FROM recordings WHERE webdavUrl IS NOT NULL").use { cursor ->
+            while (cursor.moveToNext()) {
+                val pages = encodePages(resolvePages(null, cursor.getString(1)))
+                db.execSQL("UPDATE recordings SET pages = ? WHERE id = ?", arrayOf<Any>(pages, cursor.getString(0)))
+            }
+        }
+    }
+}
+
+internal fun encodePages(pages: List<PublishedPage>): String =
+    JSONArray().apply { pages.forEach { put(JSONObject().put("kind", it.kind).put("url", it.url)) } }.toString()
+
+internal fun decodePages(value: String): List<PublishedPage> {
+    val array = JSONArray(value)
+    return List(array.length()) { array.getJSONObject(it) }.map { PublishedPage(it.getString("kind"), it.getString("url")) }
+}
+
+@Database(entities = [RecordingRow::class, PhotoRow::class], version = 3, exportSchema = false)
 internal abstract class RecordingDatabase : RoomDatabase() {
     abstract fun recordings(): RecordingDao
 }

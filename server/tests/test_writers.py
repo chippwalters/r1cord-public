@@ -8,13 +8,15 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from r1cord_server.pipeline import writers as writers_mod
+from r1cord_server.render import render_fragment
 from r1cord_server.pipeline.writers import (
     PROMPT,
     WriterError,
     _resolve_cmd,
     _argv_for,
-    summarize,
-    validate_summary,
+    run_writer,
+    transcript_markdown,
+    validate_review,
 )
 
 
@@ -29,7 +31,6 @@ def test_broken_image_link_rewritten_to_italic_alt_and_logged(tmp_path: Path) ->
     photos.mkdir()
     (photos / "ok.jpg").write_bytes(b"jpeg")
     (tmp_path / "summary.md").write_text(
-        "[brand-header]\n"
         "# Visit\n\n"
         "![good shot](photos/ok.jpg)\n"
         "![also good](./photos/ok.jpg)\n"
@@ -37,7 +38,7 @@ def test_broken_image_link_rewritten_to_italic_alt_and_logged(tmp_path: Path) ->
         encoding="utf-8",
     )
     lines: list[str] = []
-    out = validate_summary(tmp_path, lines.append)
+    out = validate_review(tmp_path, "summary", lines.append)
     text = out.read_text(encoding="utf-8")
     assert "![good shot](photos/ok.jpg)" in text
     assert "![also good](./photos/ok.jpg)" in text
@@ -47,36 +48,25 @@ def test_broken_image_link_rewritten_to_italic_alt_and_logged(tmp_path: Path) ->
     assert (tmp_path / "photos" / "ok.jpg").is_file()
 
 
-def test_missing_brand_header_inserted_as_first_line(tmp_path: Path) -> None:
-    (tmp_path / "photos").mkdir()
-    (tmp_path / "summary.md").write_text("# Title\n\nBody.\n", encoding="utf-8")
-    lines: list[str] = []
-    out = validate_summary(tmp_path, lines.append)
-    text = out.read_text(encoding="utf-8")
-    assert text.startswith("[brand-header]\n")
-    assert "# Title" in text
-    assert any("brand-header" in line for line in lines)
-
-
-def test_missing_or_empty_summary_raises_writer_error(tmp_path: Path) -> None:
+def test_missing_or_empty_review_raises_writer_error(tmp_path: Path) -> None:
     with pytest.raises(WriterError):
-        validate_summary(tmp_path, lambda _: None)
+        validate_review(tmp_path, "summary", lambda _: None)
     (tmp_path / "summary.md").write_text("", encoding="utf-8")
     with pytest.raises(WriterError):
-        validate_summary(tmp_path, lambda _: None)
+        validate_review(tmp_path, "summary", lambda _: None)
     (tmp_path / "summary.md").write_text(" \n\t\n", encoding="utf-8")
     with pytest.raises(WriterError):
-        validate_summary(tmp_path, lambda _: None)
+        validate_review(tmp_path, "summary", lambda _: None)
 
 
-def test_valid_summary_is_left_byte_for_byte_untouched(tmp_path: Path) -> None:
+def test_valid_review_is_left_byte_for_byte_untouched(tmp_path: Path) -> None:
     (tmp_path / "photos").mkdir()
     (tmp_path / "photos" / "p1.jpg").write_bytes(b"jpeg")
-    raw = "[brand-header]\n# Title\n\n![p](photos/p1.jpg)\n"
+    raw = "# Title\n\n![p](photos/p1.jpg)\n"  # no [brand-header]: nothing is added any more
     (tmp_path / "summary.md").write_text(raw, encoding="utf-8")
 
     lines: list[str] = []
-    validate_summary(tmp_path, lines.append)
+    validate_review(tmp_path, "summary", lines.append)
 
     assert (tmp_path / "summary.md").read_text(encoding="utf-8") == raw
     assert lines == []
@@ -87,10 +77,10 @@ def test_image_pointing_outside_photos_is_rewritten(tmp_path: Path) -> None:
     (tmp_path / "other").mkdir()
     (tmp_path / "other" / "escape.jpg").write_bytes(b"jpeg")
     (tmp_path / "summary.md").write_text(
-        "[brand-header]\n# T\n\n![escape](../other/escape.jpg)\n", encoding="utf-8"
+        "# T\n\n![escape](../other/escape.jpg)\n", encoding="utf-8"
     )
     lines: list[str] = []
-    validate_summary(tmp_path, lines.append)
+    validate_review(tmp_path, "summary", lines.append)
     text = (tmp_path / "summary.md").read_text(encoding="utf-8")
     assert "../other/escape.jpg" not in text
     assert "*escape*" in text
@@ -151,7 +141,7 @@ def test_resolve_cmd_appends_windows_shims(tmp_path: Path, monkeypatch: pytest.M
     assert _resolve_cmd("weird.sh") == "C:/shims/weird.cmd"
 
 
-def test_summarize_runs_command_and_returns_validated_summary(
+def test_run_writer_runs_command_and_returns_validated_review(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     work = tmp_path / "work"
@@ -162,19 +152,19 @@ def test_summarize_runs_command_and_returns_validated_summary(
         lambda writer, work_dir, config: [
             sys.executable,
             "-c",
-            "from pathlib import Path; Path('summary.md').write_text('# Title\\n\\nbody\\n', encoding='utf-8')",
+            "from pathlib import Path; Path('organized.md').write_text('# Title\\n\\nbody\\n', encoding='utf-8')",
         ],
     )
     lines: list[str] = []
-    out = summarize(work, writer="codex", timeout_s=60, config=_Cfg, log=lines.append)
+    out = run_writer(work, kind="organized", writer="codex", timeout_s=60, config=_Cfg, log=lines.append)
 
-    assert out == work / "summary.md"
-    assert out.read_text(encoding="utf-8").startswith("[brand-header]\n")
+    assert out == work / "organized.md"
+    assert out.read_text(encoding="utf-8") == "# Title\n\nbody\n"
     assert (work / "writer.log").read_text(encoding="utf-8").startswith("argv: ")
     assert any(line.startswith("argv: ") for line in lines)
 
 
-def test_summarize_nonzero_exit_reports_code_and_log_tail(
+def test_run_writer_nonzero_exit_reports_code_and_log_tail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     work = tmp_path / "work"
@@ -187,11 +177,11 @@ def test_summarize_nonzero_exit_reports_code_and_log_tail(
         ],
     )
     with pytest.raises(WriterError, match=r"writer codex exited 3") as excinfo:
-        summarize(work, writer="codex", timeout_s=60, config=_Cfg, log=lambda _l: None)
+        run_writer(work, kind="summary", writer="codex", timeout_s=60, config=_Cfg, log=lambda _l: None)
     assert "model gave up" in str(excinfo.value)
 
 
-def test_summarize_timeout_kills_process_and_reports(
+def test_run_writer_timeout_kills_process_and_reports(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     work = tmp_path / "work"
@@ -202,6 +192,29 @@ def test_summarize_timeout_kills_process_and_reports(
         lambda writer, work_dir, config: [sys.executable, "-c", "import time; time.sleep(30)"],
     )
     with pytest.raises(WriterError, match="timed out after 1s"):
-        summarize(work, writer="grok_build", timeout_s=1, config=_Cfg, log=lambda _l: None)
+        run_writer(work, kind="summary", writer="grok_build", timeout_s=1, config=_Cfg, log=lambda _l: None)
     # no summary was produced and no partial state is kept beyond the log
     assert not (work / "summary.md").exists()
+
+
+def test_review_validation_names_the_kind(tmp_path: Path) -> None:
+    (tmp_path / "summary.md").write_text("# Not this one\n", encoding="utf-8")
+    with pytest.raises(WriterError, match="outline.md missing"):
+        validate_review(tmp_path, "outline", lambda _: None)
+
+
+def test_transcript_markdown_keeps_spoken_words_literal() -> None:
+    text = transcript_markdown(
+        "Standup",
+        "2025-09-20 10:13 · 2:05",
+        "# not a heading, *not bold* <b>x</b>\n1. not a list\n\n- nor this [link](x)\n",
+    )
+    lines = text.splitlines()
+    assert lines[:3] == ["# Standup", "", "*2025-09-20 10:13 · 2:05*"]
+    assert "\\# not a heading, \\*not bold\\* \\<b\\>x\\</b\\>" in text
+    assert "1\\. not a list" in text
+    assert "\\- nor this \\[link\\](x)" in text
+
+    html = render_fragment(text)  # the pages' Markdown rules
+    assert html.count("<h1") == 1  # only the title
+    assert "<ol" not in html and "<ul" not in html and "<a " not in html and "<b>" not in html

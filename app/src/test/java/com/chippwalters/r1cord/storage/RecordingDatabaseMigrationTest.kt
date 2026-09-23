@@ -4,6 +4,7 @@ import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.chippwalters.r1cord.model.PublishedPage
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -15,9 +16,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * Migration 1 -> 2, without schema JSONs: a hand-written v1 SQLite database (the
- * pre-job schema) is opened through Room, which must run MIGRATION_1_2, keep every
- * row, and expose the new jobId/jobStatus/webdavUrl/sentAt columns.
+ * Migrations without schema JSONs: hand-written v1 (pre-job) and v2 (pre-pages) SQLite
+ * databases are opened through Room, which must run the registered migrations, keep every
+ * row, and expose the new columns.
  */
 @RunWith(RobolectricTestRunner::class)
 class RecordingDatabaseMigrationTest {
@@ -55,11 +56,27 @@ class RecordingDatabaseMigrationTest {
         db.close()
     }
 
+    /** v2 = v1 plus the job columns MIGRATION_1_2 adds; r1 was sent to a server before AI reviews. */
+    private fun createV2Database(name: String) {
+        createV1Database(name)
+        val db = SQLiteDatabase.openDatabase(context.getDatabasePath(name).path, null, SQLiteDatabase.OPEN_READWRITE)
+        db.execSQL("ALTER TABLE recordings ADD COLUMN jobId TEXT")
+        db.execSQL("ALTER TABLE recordings ADD COLUMN jobStatus TEXT NOT NULL DEFAULT 'local'")
+        db.execSQL("ALTER TABLE recordings ADD COLUMN webdavUrl TEXT")
+        db.execSQL("ALTER TABLE recordings ADD COLUMN sentAt INTEGER")
+        db.execSQL(
+            "UPDATE recordings SET jobId = 'job-1', jobStatus = 'done', " +
+                "webdavUrl = 'https://ex/2026/09/r1/summary.html', sentAt = 1750000200000 WHERE id = 'r1'"
+        )
+        db.version = 2
+        db.close()
+    }
+
     @Test
     fun migrationPreservesRowsAndFillsTheNewJobColumns() = runBlocking {
         createV1Database("migration-test.db")
         val db = Room.databaseBuilder(context, RecordingDatabase::class.java, "migration-test.db")
-            .addMigrations(MIGRATION_1_2)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
             .allowMainThreadQueries()
             .build()
         try {
@@ -79,6 +96,7 @@ class RecordingDatabaseMigrationTest {
             assertEquals("local", saved.jobStatus)
             assertNull(saved.webdavUrl)
             assertNull(saved.sentAt)
+            assertEquals("[]", saved.pages)
 
             val interrupted = dao.recording("r2")
             assertNotNull(interrupted)
@@ -87,12 +105,44 @@ class RecordingDatabaseMigrationTest {
             assertEquals(listOf("p1"), dao.photos("r1").map { it.id })
             assertEquals("SAVED", dao.photos("r1").first().status)
 
-            dao.updateJob("r1", "job-9", "queued", "https://example/x", 123L)
+            dao.updateJob("r1", "job-9", "queued", "https://example/x", "[]", 123L)
             val updated = dao.recording("r1")!!
             assertEquals("job-9", updated.jobId)
             assertEquals("queued", updated.jobStatus)
             assertEquals("https://example/x", updated.webdavUrl)
             assertEquals(123L, updated.sentAt)
+        } finally {
+            db.close()
+        }
+    }
+
+    @Test
+    fun migrationFromV2KeepsASentRecordingsLinkAsItsSummaryPage() = runBlocking {
+        createV2Database("migration-v2-test.db")
+        val db = Room.databaseBuilder(context, RecordingDatabase::class.java, "migration-v2-test.db")
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+            .allowMainThreadQueries()
+            .build()
+        try {
+            val dao = db.recordings()
+            val sent = dao.recording("r1")!!
+            assertEquals("job-1", sent.jobId)
+            assertEquals("done", sent.jobStatus)
+            assertEquals("https://ex/2026/09/r1/summary.html", sent.webdavUrl)
+            assertEquals(1_750_000_200_000L, sent.sentAt)
+            assertEquals(
+                listOf(PublishedPage("summary", "https://ex/2026/09/r1/summary.html")),
+                decodePages(sent.pages),
+            )
+            assertEquals("never-sent rows have no pages", emptyList<PublishedPage>(), decodePages(dao.recording("r2")!!.pages))
+            assertEquals(listOf("p1"), dao.photos("r1").map { it.id })
+
+            val pages = listOf(
+                PublishedPage("transcript", "https://ex/t.html"),
+                PublishedPage("outline", "https://ex/o.html"),
+            )
+            dao.updateJobStatus("r1", "done", "https://ex/t.html", encodePages(pages))
+            assertEquals(pages, decodePages(dao.recording("r1")!!.pages))
         } finally {
             db.close()
         }

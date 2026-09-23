@@ -1,0 +1,14 @@
+{# A recording's pages in page order: the published page, else the copy built on this PC (tagged
+   local), each followed by its Markdown source. #}
+{% macro page_links(pages) -%}
+{% for p in pages %}
+<span>
+  {%- if p.local -%}
+  <a class="page-link page-local" href="{{ p.url }}" title="Not published — view the copy on this PC">{{ p.label }}<span class="page-tag">local</span></a>
+  {%- else -%}
+  <a class="page-link" href="{{ p.url }}" target="_blank" rel="noopener" title="Published page">{{ p.label }}</a>
+  {%- endif %}
+  {% if p.md_url %}<a class="page-link page-local" href="{{ p.md_url }}" download title="Download the {{ p.label }} Markdown{{ '' if p.md_local else ' (published)' }}">.md</a>{% endif %}
+</span>
+{% endfor %}
+{%- endmacro %}

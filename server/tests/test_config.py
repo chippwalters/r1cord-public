@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -20,9 +21,9 @@ def test_round_trip_all_field_types(tmp_path: Path) -> None:
         datastore=tmp_path / "ds",
         webdav_folder=tmp_path / "wd",
         public_url_base="https://x.test/pub/",
-        theme="Other-Theme",
+        theme="github-light",
         default_writer="codex",
-        default_summary_style="minutes",
+        default_reviews=("outline", "organized"),
         writer_timeout_s=30,
         claude_cmd="claude1",
         codex_cmd="codex1",
@@ -81,7 +82,8 @@ def test_unknown_keys_ignored(tmp_path: Path) -> None:
     [
         ('default_writer = "bogus"\n', "default_writer"),
         ('asr_device = "gpu"\n', "asr_device"),
-        ('default_summary_style = "poem"\n', "default_summary_style"),
+        ('default_reviews = ["summary", "poem"]\n', "default_reviews"),
+        ('default_reviews = "summary"\n', "default_reviews"),
         ('usb_auto_action = "detonate"\n', "usb_auto_action"),
         ('run_mode = "sometimes"\n', "run_mode"),
         ("usb_poll_s = 0\n", "usb_poll_s"),
@@ -96,6 +98,27 @@ def test_parse_errors_name_the_field(tmp_path: Path, snippet: str, field: str) -
     with pytest.raises(ValueError) as exc:
         load(path)
     assert field in str(exc.value)
+
+
+def test_config_from_before_ai_reviews_still_loads(tmp_path: Path) -> None:
+    """Customers' config.toml files name the removed summary style and the old `summarize` action."""
+    path = _write(
+        tmp_path / "config.toml",
+        'admin_password = "pw"\ndefault_summary_style = "minutes"\nusb_auto_action = "summarize"\n',
+    )
+    cfg = load(path)
+    assert cfg.usb_auto_action == "review"
+    assert cfg.default_reviews == ("summary",)
+    save(cfg, path)
+    assert "default_summary_style" not in path.read_text(encoding="utf-8")
+    assert load(path) == cfg
+
+
+def test_default_reviews_load_in_canonical_order(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.toml", 'admin_password = "pw"\ndefault_reviews = ["organized", "summary", "organized"]\n')
+    assert load(path).default_reviews == ("summary", "organized")
+    empty = _write(tmp_path / "empty.toml", 'admin_password = "pw"\ndefault_reviews = []\n')
+    assert load(empty).default_reviews == ()
 
 
 def test_parse_int_coercion_from_string(tmp_path: Path) -> None:
@@ -132,3 +155,28 @@ def test_email_and_run_mode_fields_parse(tmp_path: Path) -> None:
     assert cfg.email_to == "a@b.test"
     assert cfg.gws_cmd == "gws9"
     assert cfg.run_mode == "always"
+
+
+def test_theme_name_from_an_older_config_loads_as_its_id(tmp_path: Path) -> None:
+    path = _write(tmp_path / "config.toml", 'admin_password = "pw"\ntheme = "Toolmaker-Noir"\n')
+    assert load(path).theme == "toolmaker-noir"
+    named = _write(tmp_path / "named.toml", 'admin_password = "pw"\ntheme = "GitHub Light"\n')
+    assert load(named).theme == "github-light"
+    assert Config().theme == "toolmaker-noir"
+
+
+def test_unknown_theme_falls_back_to_the_default_with_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = _write(tmp_path / "config.toml", 'admin_password = "pw"\ntheme = "My-Custom"\n')
+    with caplog.at_level(logging.WARNING, logger="r1cord_server.config"):
+        cfg = load(path)
+    assert cfg.theme == "toolmaker-noir"
+    assert any("My-Custom" in r.getMessage() for r in caplog.records if r.name == "r1cord_server.config")
+
+
+def test_with_updates_takes_a_theme_by_name_or_id_and_refuses_an_unknown_one() -> None:
+    assert with_updates(Config(), theme="High Contrast").theme == "high-contrast"
+    assert with_updates(Config(), theme="altuit-toc").theme == "altuit-toc"
+    with pytest.raises(ValueError):
+        with_updates(Config(), theme="nope")

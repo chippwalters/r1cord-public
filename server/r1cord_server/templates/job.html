@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_page_links.html" import page_links %}
 {% block title %}Job {{ job_id }} — R1CORD Server{% endblock %}
 {% block body %}
 {% if notice %}<p class="error">{{ notice }}</p>{% endif %}
@@ -11,6 +12,7 @@
 <p class="muted">{{ job.job_id }} · {{ job.recording_id }} · {{ job.status }}</p>
 
 {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
+{% if active %}<p class="banner banner-work busy-banner"><span class="spinner" aria-hidden="true"></span> Working: {{ job.status }}. This page updates by itself.</p>{% endif %}
 
 <section class="card">
   <h2>Result</h2>
@@ -18,18 +20,13 @@
     <dt>status</dt><dd>{{ result.status }}</dd>
     <dt>error</dt><dd>{{ result.error or "—" }}</dd>
     <dt>writer</dt><dd>{{ result.writer }}</dd>
-    <dt>summarize</dt><dd>{{ result.summarize }}</dd>
+    <dt>AI reviews</dt><dd>{% for kind in result.reviews %}{{ labels[kind] }}{% if not loop.last %} · {% endif %}{% else %}none (transcript only){% endfor %}</dd>
     <dt>publish</dt><dd>{{ result.publish }}</dd>
-    <dt>style</dt><dd>{{ result.summaryStyle }}</dd>
     <dt>created</dt><dd>{{ result.createdAt }}</dd>
     <dt>updated</dt><dd>{{ result.updatedAt }}</dd>
     <dt>publish folder</dt><dd class="path">{{ result.publishFolder or "—" }}</dd>
-    <dt>URL</dt>
-    <dd>
-      {% if result.webdavUrl %}
-      <a href="{{ result.webdavUrl }}">{{ result.webdavUrl }}</a>
-      {% else %}—{% endif %}
-    </dd>
+    <dt>pages</dt>
+    <dd>{% if pages %}<span class="rec-pages">{{ page_links(pages) }}</span>{% else %}none yet{% endif %}</dd>
     <dt>timings (ms)</dt>
     <dd>asr {{ result.timingsMs.asr }} · writer {{ result.timingsMs.writer }} · publish {{ result.timingsMs.publish }}</dd>
     <dt>asr</dt>
@@ -55,27 +52,39 @@
 <section class="card">
   <h2>Email</h2>
   <form method="post" action="/admin/jobs/{{ job.job_id }}/email">
-    <button type="submit" {% if not config.email_to %}disabled{% endif %}>Email summary</button>
-    <span class="muted">{% if config.email_to %}to {{ config.email_to }}{% else %}Set email_to on the <a href="/admin/config">Config</a> page first.{% endif %}</span>
+    <button type="submit" {% if not config.email_to %}disabled{% endif %}>Email review</button>
+    <span class="muted">{% if config.email_to %}to {{ config.email_to }}{% else %}Set email_to on the <a href="/admin/config">Settings</a> page first.{% endif %}</span>
   </form>
 </section>
 
 <section class="card">
   <h2>Retry</h2>
-  <form method="post" action="/admin/jobs/{{ job.job_id }}/retry-writer">
-    <label>Writer
-      <select name="writer">
-        <option value="">keep {{ job.writer }}</option>
-        <option value="claude_code">claude_code</option>
-        <option value="codex">codex</option>
-        <option value="grok_build">grok_build</option>
-      </select>
-    </label>
-    <button type="submit">Retry writer</button>
-  </form>
-  <form method="post" action="/admin/jobs/{{ job.job_id }}/retry-publish">
-    <button type="submit">Retry publish</button>
-  </form>
+  <div class="retry-grid">
+    <form method="post" action="/admin/jobs/{{ job.job_id }}/retry-writer" class="retry-block" data-busy>
+      <h3>Rewrite AI reviews</h3>
+      <p class="muted">Runs the writer again on the stored transcript for the reviews you tick, then republishes the pages.</p>
+      <label>Writer
+        <select name="writer">
+          <option value="">Same as last time ({{ job.writer }})</option>
+          <option value="claude_code">claude_code</option>
+          <option value="codex">codex</option>
+          <option value="grok_build">grok_build</option>
+        </select>
+      </label>
+      <input type="hidden" name="reviews" value="">
+      <div class="retry-checks">
+        {% for kind in review_kinds %}
+        <label class="check"><input type="checkbox" name="reviews" value="{{ kind }}" {% if kind in retry_reviews %}checked{% endif %}> {{ labels[kind] }}</label>
+        {% endfor %}
+      </div>
+      <button type="submit" {% if active %}disabled title="Busy — wait for the job to finish"{% endif %}>Rewrite reviews</button>
+    </form>
+    <form method="post" action="/admin/jobs/{{ job.job_id }}/retry-publish" class="retry-block" data-busy>
+      <h3>Republish pages</h3>
+      <p class="muted">Rebuilds the HTML and .md pages from the reviews already written, in the current theme, and copies them to the publish folder. No AI runs.</p>
+      <button type="submit" class="btn-secondary" {% if active %}disabled title="Busy — wait for the job to finish"{% endif %}>Republish pages</button>
+    </form>
+  </div>
 </section>
 
 <section class="card">

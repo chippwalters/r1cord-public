@@ -16,6 +16,7 @@ import android.os.StatFs
 import android.provider.MediaStore
 import androidx.room.Room
 import com.chippwalters.r1cord.model.PhotoItem
+import com.chippwalters.r1cord.model.PublishedPage
 import com.chippwalters.r1cord.model.RecordingItem
 import java.io.File
 import java.io.IOException
@@ -44,7 +45,7 @@ class RecordingLibrary(context: Context) {
     private val resolver = context.contentResolver
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val db = Room.databaseBuilder(this.context, RecordingDatabase::class.java, "r1cord.db")
-        .addMigrations(MIGRATION_1_2)
+        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
         .build()
     private val dao = db.recordings()
     private val lock = Mutex()
@@ -65,7 +66,7 @@ class RecordingLibrary(context: Context) {
                 waveform = decodeWaveform(row.waveform),
                 jobId = row.jobId,
                 jobStatus = row.jobStatus,
-                webdavUrl = row.webdavUrl,
+                pages = decodePages(row.pages),
             )
         }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -225,14 +226,14 @@ class RecordingLibrary(context: Context) {
         }
     }
 
-    suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, sentAt: Long?) = withContext(Dispatchers.IO) {
+    suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, pages: List<PublishedPage>, sentAt: Long?) = withContext(Dispatchers.IO) {
         ready.await()
-        lock.withLock { dao.updateJob(id, jobId, status, url, sentAt) }
+        lock.withLock { dao.updateJob(id, jobId, status, url, encodePages(pages), sentAt) }
     }
 
-    suspend fun updateJobStatus(id: String, status: String, url: String?) = withContext(Dispatchers.IO) {
+    suspend fun updateJobStatus(id: String, status: String, url: String?, pages: List<PublishedPage>) = withContext(Dispatchers.IO) {
         ready.await()
-        lock.withLock { dao.updateJobStatus(id, status, url) }
+        lock.withLock { dao.updateJobStatus(id, status, url, encodePages(pages)) }
     }
 
     suspend fun deletePhoto(recordingId: String, photoId: String) = withContext(Dispatchers.IO) {

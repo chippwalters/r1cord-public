@@ -24,18 +24,18 @@ class OffloadSettingsTest {
     }
 
     @Test
-    fun unknownStyleFallsBackToNotesAndValidStylesAreKept() {
-        assertEquals("notes", OffloadSettings.defaultStyle(context))
-        OffloadSettings.setDefaultStyle(context, "minutes")
-        assertEquals("minutes", OffloadSettings.defaultStyle(context))
-        OffloadSettings.setDefaultStyle(context, "poem")
-        assertEquals("notes", OffloadSettings.defaultStyle(context))
+    fun defaultReviewsStartWithSummaryAndAreStoredInCanonicalOrderWithoutUnknownKinds() {
+        assertEquals(listOf("summary"), OffloadSettings.defaultReviews(context))
+        OffloadSettings.setDefaultReviews(context, listOf("organized", "poem", "outline"))
+        assertEquals(listOf("outline", "organized"), OffloadSettings.defaultReviews(context))
+        OffloadSettings.setDefaultReviews(context, emptyList())
+        assertEquals(emptyList<String>(), OffloadSettings.defaultReviews(context))
     }
 
     @Test
-    fun corruptStoredStyleFallsBackToNotes() {
+    fun summarizeTurnedOffBeforeAiReviewsSeedsNoReviews() {
         context.getSharedPreferences("app_preferences", android.content.Context.MODE_PRIVATE)
-            .edit().putString("offload_default_style", "gibberish").commit()
-        assertEquals("notes", OffloadSettings.defaultStyle(context))
+            .edit().putBoolean("offload_default_summarize", false).commit()
+        assertEquals(emptyList<String>(), OffloadSettings.defaultReviews(context))
     }
 }

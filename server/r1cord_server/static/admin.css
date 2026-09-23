@@ -114,6 +114,8 @@ a.tile:hover { border-color: var(--orange); text-decoration: none; transform: tr
 
 /* --- tables ------------------------------------------------------------------------------ */
 .table-scroll { overflow-x: auto; }
+/* The scroll box clips an open row popover (Delete, Add review); give it room below the table. */
+.table-scroll:has(details.confirm[open]) { padding-bottom: 240px; }
 table { width: 100%; border-collapse: collapse; }
 th {
   text-align: left; font: 400 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted);
@@ -131,6 +133,13 @@ th.num { text-align: right; color: var(--muted); }
 .rec-title:hover { color: var(--orange); text-decoration: none; }
 .rec-id { display: block; margin-top: 3px; font: 400 11px/1.2 var(--mono); color: var(--muted); }
 .rec-id-inline { display: inline; margin: 0 0 0 8px; }
+.rec-pages { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
+.page-link { font: 400 11.5px/1.2 var(--mono); letter-spacing: .04em; color: var(--teal); }
+.page-local { color: var(--body); }
+.page-tag {
+  margin-left: 5px; font: 400 9.5px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+  padding: 1px 5px; border: 1px solid var(--border); border-radius: 999px;
+}
 table.compact td { padding: 9px 10px; }
 
 /* --- pills ------------------------------------------------------------------------------- */
@@ -141,6 +150,11 @@ table.compact td { padding: 9px 10px; }
 .pill-ok { color: var(--teal); border-color: var(--teal-line); }
 .pill-bad { color: var(--orange); border-color: var(--orange-line); }
 .pill-work { color: var(--text); border-color: var(--border); }
+.pill-work::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: -1px;
+  border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: spin .9s linear infinite;
+}
 .pill-idle { color: var(--muted); }
 
 /* --- buttons ----------------------------------------------------------------------------- */
@@ -159,6 +173,29 @@ button:disabled { opacity: .4; cursor: not-allowed; filter: none; }
 .btn-small { font-size: 13px; padding: 7px 12px; }
 .button-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .button-row form { margin: 0; }
+
+/* --- busy ------------------------------------------------------------------------------- */
+.spinner {
+  display: inline-block; width: 13px; height: 13px; flex: none;
+  border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner, .pill-work::before { animation-duration: 2.4s; } }
+button.is-busy:disabled { opacity: .75; cursor: progress; }
+.busy-banner { display: flex; align-items: center; gap: 10px; }
+
+/* --- job page retry ---------------------------------------------------------------------- */
+.retry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+.retry-block {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin: 0;
+  padding: 18px; border: 1px solid var(--border); border-radius: 6px; background: var(--row);
+}
+.retry-block h3 { margin: 0; font: 600 15px/1.2 var(--ui); color: var(--text); }
+.retry-block p { margin: 0; }
+.retry-block label { display: block; width: 100%; color: var(--body); }
+.retry-checks { display: flex; flex-direction: column; gap: 8px; }
+.retry-block button { margin-top: auto; }
 
 td.actions { text-align: right; white-space: nowrap; }
 td.actions form { display: inline; margin: 0; }
@@ -188,6 +225,9 @@ details.confirm[open] > summary { border-color: var(--orange); color: var(--oran
 }
 .confirm-pop p { margin: 0 0 8px; font-size: 13.5px; color: var(--lede); }
 .confirm-pop .muted { font-size: 12.5px; }
+.confirm-pop-left { left: 0; right: auto; }
+details.confirm.menu[open] > summary { border-color: var(--teal); color: var(--teal); }
+td.actions form.review-menu { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 4px 0 10px; }
 
 /* --- banners ----------------------------------------------------------------------------- */
 .banner { margin: 0 0 14px; padding: 10px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--row); color: var(--lede); }
@@ -232,6 +272,25 @@ form.stack input[type="text"], form.stack input[type="number"], form.stack input
 td select, .inline-form select { display: inline-block; width: auto; margin: 0; padding: 6px 8px; }
 form.stack input:focus, select:focus { outline: none; border-color: var(--teal); }
 label.check { display: flex; align-items: center; gap: 8px; }
+fieldset.review-defaults { border: 0; margin: 0 0 16px; padding: 0; }
+fieldset.review-defaults legend { padding: 0; margin-bottom: 8px; color: var(--body); }
+fieldset.review-defaults label.check { margin-bottom: 8px; }
+.reviews-settings { margin-top: 36px; }
+.reviews-settings > h2 { margin-bottom: 14px; }
+.prompt-panel h3 { font-size: 11.5px; }
+textarea.prompt-text {
+  display: block; width: 100%; min-height: 220px; resize: vertical;
+  background: var(--recessed); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  padding: 12px 14px; font: 400 12.5px/1.6 var(--mono);
+}
+textarea.prompt-text:focus { outline: none; border-color: var(--teal); }
+
+/* --- Settings > Pages: the sample recording in the chosen theme ------------------------------ */
+iframe.theme-preview {
+  display: block; width: 100%; height: 460px; margin-top: 14px;
+  background: var(--recessed); border: 1px solid var(--border); border-radius: 6px;
+}
+
 form.inline { display: inline-block; margin-left: 8px; }
 .inline-form { display: inline-flex; align-items: center; gap: 6px; margin: 0; }
 .code {

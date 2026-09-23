@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .admin import router as admin_router
 from .api import router as api_router
 from .config import Config
+from .pipeline.publish import Republisher
 from .store import JobStore
 from .usb import UsbWatcher
 from .worker import Worker
@@ -54,8 +55,11 @@ def _setup_logging(config: Config) -> None:
 
 
 def create_app(config: Config, config_path: Path | None = None) -> FastAPI:
+    config_path = config_path or Path(config.datastore) / "config.toml"
+    # Edited AI review prompts live beside config.toml as prompts/<kind>.md.
+    prompts_dir = config_path.parent / "prompts"
     store = JobStore(config)
-    worker = Worker(store, config)
+    worker = Worker(store, config, prompts_dir=prompts_dir)
     usb = UsbWatcher(
         store,
         lambda: app.state.config,
@@ -82,7 +86,10 @@ def create_app(config: Config, config_path: Path | None = None) -> FastAPI:
     app.state.store = store
     app.state.worker = worker
     app.state.usb = usb
-    app.state.config_path = config_path or Path(config.datastore) / "config.toml"
+    app.state.config_path = config_path
+    app.state.prompts_dir = prompts_dir
+    # Settings > Pages > Republish all pages runs on its own thread; the last run's results live here.
+    app.state.republish = Republisher()
     app.state.last_activity = time.monotonic()
     # __main__ replaces this with uvicorn's should_exit; under an embedded/test app it is a no-op.
     app.state.request_exit = lambda: None

@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Republish pages — R1CORD Server{% endblock %}
+{% block body %}
+{% if notice %}<p class="banner banner-bad">{{ notice }}</p>{% endif %}
+{% if plan is not none %}
+{% set todo = plan|rejectattr("skip")|list %}
+<section class="panel">
+  <div class="panel-head">
+    <h1 class="eyebrow eyebrow-bar">Republish preview <span class="count">{{ todo|length }} of {{ plan|length }}</span></h1>
+    <span class="pill pill-idle">Dry run — nothing written</span>
+  </div>
+  <p class="lede">Republishing rebuilds each recording below in <strong>{{ theme.name }}</strong> from the Markdown on this PC, deploys it into its folder, then removes the MD DOCS files those pages replace. Nothing else in a folder, and nothing outside the recordings' folders, is touched.</p>
+  {% if plan %}
+  <div class="table-scroll">
+  <table class="compact">
+    <thead>
+      <tr><th>Recording</th><th>Folder</th><th>Pages it writes</th><th>Legacy files it removes</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+    {% for item in plan %}
+      <tr>
+        <td><span class="rec-title">{{ item.title }}</span><span class="rec-id">{{ item.recording_id }}</span></td>
+        <td class="path">{{ item.folder }}</td>
+        <td class="mono-cell">{% for k in item.pages %}{{ labels[k] }}{% if not loop.last %} · {% endif %}{% else %}—{% endfor %}</td>
+        <td class="mono-cell">{% for name in item.legacy %}{{ name }}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
+        <td>{% if item.skip %}<span class="pill pill-idle">Skipped: {{ item.skip }}</span>{% else %}<span class="pill">Republish</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="empty">No recording on this PC has a publish folder yet.</p>
+  {% endif %}
+  <div class="button-row">
+    {% if todo %}
+    <form method="post" action="/admin/republish" data-busy>
+      <button type="submit" class="btn btn-small">Republish {{ todo|length }} recording{{ "s" if todo|length != 1 }}</button>
+    </form>
+    {% endif %}
+    <a class="btn btn-secondary btn-small" href="/admin/config#pages">Back to Settings</a>
+  </div>
+</section>
+{% else %}
+{% set failed = run.results|selectattr("error")|list %}
+<section class="panel">
+  <div class="panel-head">
+    <h1 class="eyebrow eyebrow-bar">Republish</h1>
+    {% if run.running %}
+    <span class="pill pill-work">Running</span>
+    {% elif run.started_at is not none %}
+    <span class="pill {{ 'pill-bad' if failed or run.error else 'pill-ok' }}">{% if failed or run.error %}Finished with errors{% else %}Done{% endif %}</span>
+    {% endif %}
+  </div>
+  {% if run.started_at is none %}
+  <p class="empty">No republish has run since the server started. Start one from <a href="/admin/config#pages">Settings, Pages</a>.</p>
+  {% else %}
+  <p class="lede">{% if run.running %}Republishing in <strong>{{ theme.name }}</strong>; this page updates itself.{% else %}Republished in <strong>{{ theme.name }}</strong>.{% endif %}</p>
+  {% if run.error %}<p class="banner banner-bad">Stopped: {{ run.error }}</p>{% endif %}
+  {% if run.results %}
+  <div class="table-scroll">
+  <table class="compact">
+    <thead>
+      <tr><th>Recording</th><th>Folder</th><th>Pages</th><th class="num">Files written</th><th>Removed</th><th>Result</th></tr>
+    </thead>
+    <tbody>
+    {% for r in run.results %}
+      <tr>
+        <td><span class="rec-title">{{ r.title }}</span><span class="rec-id">{{ r.recording_id }}</span></td>
+        <td class="path">{{ r.folder }}</td>
+        <td class="mono-cell">{% for k in r.pages %}{{ labels[k] }}{% if not loop.last %} · {% endif %}{% else %}—{% endfor %}</td>
+        <td class="num">{{ r.written if not r.skip else "—" }}</td>
+        <td class="mono-cell">{% for name in r.removed %}{{ name }}{% if not loop.last %}<br>{% endif %}{% else %}—{% endfor %}</td>
+        <td>
+          {% if r.error %}<span class="pill pill-bad" title="{{ r.error }}">Failed</span> <span class="muted">{{ r.error }}</span>
+          {% elif r.skip %}<span class="pill pill-idle">Skipped: {{ r.skip }}</span>
+          {% else %}<span class="pill pill-ok">Done</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% elif not run.running %}
+  <p class="empty">No recording on this PC has a publish folder yet.</p>
+  {% endif %}
+  {% endif %}
+  <div class="button-row">
+    <a class="btn btn-secondary btn-small" href="/admin/config#pages">Back to Settings</a>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

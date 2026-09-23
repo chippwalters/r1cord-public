@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import string
 import tomllib
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Any
 
 import tomli_w
+
+from .render import DEFAULT_THEME_ID, get_theme
+
+_log = logging.getLogger("r1cord_server.config")
 
 
 def _config_dir() -> Path:
@@ -19,7 +25,7 @@ def _config_dir() -> Path:
 
 
 # Config lives beside the app data (%LOCALAPPDATA%\R1CORD); the datastore is a config field and
-# may point at a bigger drive. Publish paths are empty until the user sets them (publish needs MD DOCS).
+# may point at a bigger drive. Publish paths are empty until the user sets them.
 DEFAULT_CONFIG_DIR = _config_dir()
 DEFAULT_DATASTORE = DEFAULT_CONFIG_DIR / "data"
 DEFAULT_WEBDAV_FOLDER = DEFAULT_CONFIG_DIR / "publish"
@@ -28,11 +34,35 @@ DEFAULT_PUBLIC_URL_BASE = ""
 _PATH_FIELDS = frozenset({"datastore", "webdav_folder"})
 _INT_FIELDS = frozenset({"listen_port", "writer_timeout_s", "pair_code_ttl_s", "usb_poll_s", "idle_exit_min"})
 _BOOL_FIELDS = frozenset({"usb_enabled", "email_enabled"})
+_REVIEW_FIELDS = frozenset({"default_reviews"})
 _WRITERS = frozenset({"claude_code", "codex", "grok_build", "none"})
 _ASR_DEVICES = frozenset({"auto", "cuda", "cpu"})
-_STYLES = frozenset({"notes", "minutes", "article"})
-USB_ACTIONS = ("archive", "transcribe", "summarize", "publish")
+# `review` runs default_reviews; `publish` runs them and publishes. Config files written before AI
+# reviews say `summarize`, which meant the same as `review`.
+USB_ACTIONS = ("archive", "transcribe", "review", "publish")
+_LEGACY_USB_ACTIONS = {"summarize": "review"}
 RUN_MODES = ("plug", "always")
+
+# AI reviews of a recording's transcript, in canonical (page) order. The transcript page comes first.
+REVIEW_KINDS = ("summary", "outline", "organized")
+PAGE_KINDS = ("transcript", *REVIEW_KINDS)
+PAGE_LABELS = {
+    "transcript": "Transcript",
+    "summary": "Summary",
+    "outline": "Outline",
+    "organized": "Cleaned up & organized",
+}
+PAGE_SHORT_LABELS = {**PAGE_LABELS, "organized": "Organized"}
+
+
+def canonical_reviews(kinds: Iterable[str]) -> tuple[str, ...]:
+    """Review kinds in canonical order, duplicates dropped. Unknown kinds raise ValueError."""
+    chosen = set()
+    for kind in kinds:
+        if kind not in REVIEW_KINDS:
+            raise ValueError(f"unknown review: {kind!r} (expected summary, outline or organized)")
+        chosen.add(kind)
+    return tuple(k for k in REVIEW_KINDS if k in chosen)
 
 
 def _random_password(length: int = 16) -> str:
@@ -48,9 +78,10 @@ class Config:
     datastore: Path = DEFAULT_DATASTORE
     webdav_folder: Path = DEFAULT_WEBDAV_FOLDER
     public_url_base: str = DEFAULT_PUBLIC_URL_BASE
-    theme: str = "Toolmaker-Noir"
+    # A page theme id (render.list_themes()); files written before theme ids hold a theme name.
+    theme: str = DEFAULT_THEME_ID
     default_writer: str = "claude_code"
-    default_summary_style: str = "notes"
+    default_reviews: tuple[str, ...] = ("summary",)
     writer_timeout_s: int = 900
     claude_cmd: str = "claude"
     codex_cmd: str = "codex"
@@ -67,7 +98,7 @@ class Config:
     usb_device_root: str = "/sdcard/Download/R1CORD"
     run_mode: str = "plug"
     idle_exit_min: int = 10
-    # Email each finished job's summary through the Google Workspace CLI (`gws`, signed in on this PC).
+    # Email each finished job's AI review (or transcript) through the Google Workspace CLI (`gws`, signed in on this PC).
     email_enabled: bool = False
     email_to: str = ""
     gws_cmd: str = "gws"
@@ -93,12 +124,17 @@ def save(config: Config, path: Path | None = None) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {}
     for key, value in asdict(config).items():
-        payload[key] = str(value) if isinstance(value, Path) else value
+        if isinstance(value, Path):
+            value = str(value)
+        elif isinstance(value, tuple):
+            value = list(value)
+        payload[key] = value
     dest.write_text(tomli_w.dumps(payload), encoding="utf-8")
 
 
 def with_updates(config: Config, **changes: Any) -> Config:
-    """Return a new Config with the given fields replaced. Unknown keys are ignored."""
+    """Return a new Config with the given fields replaced. Unknown keys are ignored; a theme name
+    becomes its id, and an unknown theme raises ValueError."""
     known = {f.name for f in fields(Config)}
     cleaned: dict[str, Any] = {}
     for key, value in changes.items():
@@ -110,6 +146,10 @@ def with_updates(config: Config, **changes: Any) -> Config:
             cleaned[key] = int(value)
         elif key in _BOOL_FIELDS:
             cleaned[key] = bool(value)
+        elif key in _REVIEW_FIELDS:
+            cleaned[key] = canonical_reviews(value)
+        elif key == "theme":
+            cleaned[key] = get_theme(str(value)).id
         else:
             cleaned[key] = value
     return replace(config, **cleaned)
@@ -141,10 +181,21 @@ def _parse(cfg_path: Path) -> Config:
                 value = int(value)
             elif f.name in _BOOL_FIELDS:
                 value = bool(value)
+            elif f.name in _REVIEW_FIELDS:
+                if isinstance(value, str) or not isinstance(value, list):
+                    raise ValueError("expected a list")
+                value = canonical_reviews(value)
+            elif f.name == "usb_auto_action":
+                value = _LEGACY_USB_ACTIONS.get(value, value)
         except (TypeError, ValueError) as exc:
             raise ValueError(f"invalid {f.name}: {raw[f.name]!r} ({exc})") from exc
         kwargs[f.name] = value
     config = Config(**kwargs)
+    try:
+        config = replace(config, theme=get_theme(config.theme).id)
+    except ValueError:
+        _log.warning("config: unknown theme %r, using %s", config.theme, DEFAULT_THEME_ID)
+        config = replace(config, theme=DEFAULT_THEME_ID)
     if not config.admin_password:
         password = _random_password()
         config = replace(config, admin_password=password)
@@ -157,8 +208,6 @@ def _parse(cfg_path: Path) -> Config:
         raise ValueError(f"invalid default_writer: {config.default_writer}")
     if config.asr_device not in _ASR_DEVICES:
         raise ValueError(f"invalid asr_device: {config.asr_device}")
-    if config.default_summary_style not in _STYLES:
-        raise ValueError(f"invalid default_summary_style: {config.default_summary_style}")
     if config.usb_auto_action not in USB_ACTIONS:
         raise ValueError(f"invalid usb_auto_action: {config.usb_auto_action}")
     if config.usb_poll_s < 1:

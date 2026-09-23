@@ -1,0 +1,18 @@
+{
+  "source": "md-docs",
+  "themes": {
+    "altuit-toc-lg.css": "ea63ac3f12cec476d6048ff19c127a4dff13ffecfb3021e5ce1f71bbc7eebbd4",
+    "altuit-toc-light.css": "14b50abf61e8d17712493302ba86af881d9457b98ba62490e4fa20861f54f1db",
+    "altuit-toc-sketchnote.css": "cecd697b607f33e0693d00e1a5394a05e693139386f28fa3cafe17b1453fa9ea",
+    "altuit-toc.css": "e9494511fe142e7ff490a2a27f4483f5782709c8b801a0b56d69ffd90c01ae5d",
+    "altuit.css": "5e52a7582808ae1bcaf7fbdb4daf6643a4d5bd26889f8cfe57b6738e9c24d847",
+    "clean-light.css": "db7469010525d40c5e84c32df3672319cea9084f08d1e2c773a86e7282ef4794",
+    "github-dark.css": "81b5a43b84a28e022f034cb4f7898544b530061f141d2cfe38d8d0bce49e6b7d",
+    "github-light.css": "fec061b691589023b93456e7ccc406fb183800cd34977f6fec521616c28a18f7",
+    "high-contrast.css": "b7c4f59d99b19cb7747713eae575009f542c32f5290daa4c173f5b2c9f2cc51c",
+    "modern-dark.css": "4e801923af523d8d772d7fd5d904ce492e89d619c02e3392a0bdcc48bab36e27",
+    "notion.css": "fc26dd9f30fb45ce44c9067f3101617f3a626d7e3b324aae95fce012aa8b687e",
+    "toolmaker-noir.css": "f9b5b6d29c0c9b94f4cb95b8998cf124aae701c5ecf7723d1b08241f9a9d23ac"
+  },
+  "version": "1.2.85"
+}

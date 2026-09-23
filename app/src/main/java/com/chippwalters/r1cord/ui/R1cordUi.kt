@@ -97,6 +97,7 @@ import com.chippwalters.r1cord.camera.CameraScreen
 import com.chippwalters.r1cord.model.AppUiState
 import com.chippwalters.r1cord.model.CaptureStatus
 import com.chippwalters.r1cord.model.PhotoItem
+import com.chippwalters.r1cord.model.REVIEW_KINDS
 import com.chippwalters.r1cord.model.RecordingItem
 import com.chippwalters.r1cord.model.Screen
 import com.chippwalters.r1cord.model.SendResultUi
@@ -392,9 +393,9 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
             if (deviceBadge(item.jobStatus) != "local") {
                 JobBadge(item.jobStatus)
             }
-            if (!item.webdavUrl.isNullOrBlank()) {
-                ActionButton("OPEN SUMMARY", "Open published summary", Icons.Default.Description,
-                    { model.openSummary(item.webdavUrl) }, Modifier.fillMaxWidth())
+            item.pages.forEach { page ->
+                ActionButton(page.kind.uppercase(Locale.ROOT), "Open published ${page.kind} page", Icons.Default.Description,
+                    { model.openPage(page.url) }, Modifier.fillMaxWidth())
             }
             if (deviceBadge(item.jobStatus) != "local") {
                 TextButton(
@@ -612,9 +613,8 @@ internal fun JobBadge(status: String) {
 private fun SendSheet(item: RecordingItem, model: R1cordViewModel) {
     val context = LocalContext.current
     var title by remember(item.id) { mutableStateOf(item.title) }
-    var summarize by remember(item.id) { mutableStateOf(OffloadSettings.defaultSummarize(context)) }
+    var reviews by remember(item.id) { mutableStateOf(OffloadSettings.defaultReviews(context)) }
     var publish by remember(item.id) { mutableStateOf(OffloadSettings.defaultPublish(context)) }
-    var style by remember(item.id) { mutableStateOf(OffloadSettings.defaultStyle(context)) }
     AlertDialog(
         onDismissRequest = model::closeSendSheet,
         title = { Text("Send recording") },
@@ -627,20 +627,18 @@ private fun SendSheet(item: RecordingItem, model: R1cordViewModel) {
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Summarize", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    Switch(checked = summarize, onCheckedChange = { summarize = it })
-                }
+                Text("AI reviews", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ReviewToggles(reviews) { reviews = it }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("Publish", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     Switch(checked = publish, onCheckedChange = { publish = it })
                 }
-                StylePicker(style) { style = it }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { model.send(item.id, title, summarize, publish, style) },
+                onClick = { model.send(item.id, title, reviews, publish) },
                 enabled = title.trim().isNotEmpty(),
                 modifier = control("Send recording"),
             ) { Text("SEND") }
@@ -651,21 +649,27 @@ private fun SendSheet(item: RecordingItem, model: R1cordViewModel) {
     )
 }
 
+/**
+ * One switch per AI review, in canonical order. [longLabels] spells out "Cleaned up & organized"
+ * where the screen has room (Settings); the Send sheet uses the short "Organized".
+ */
 @Composable
-internal fun StylePicker(selected: String, onSelect: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        listOf("notes" to "Notes", "minutes" to "Minutes", "article" to "Article").forEach { (value, label) ->
-            Button(
-                onClick = { onSelect(value) },
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (selected == value) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surfaceContainer,
-                    contentColor = if (selected == value) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurface,
-                ),
-            ) { Text(label, style = MaterialTheme.typography.titleSmall, maxLines = 1) }
+internal fun ReviewToggles(selected: List<String>, longLabels: Boolean = false, onChange: (List<String>) -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        REVIEW_KINDS.forEach { kind ->
+            val label = when (kind) {
+                "summary" -> "Summary"
+                "outline" -> "Outline"
+                else -> if (longLabels) "Cleaned up & organized" else "Organized"
+            }
+            Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Switch(
+                    checked = kind in selected,
+                    onCheckedChange = { on -> onChange(REVIEW_KINDS.filter { it == kind && on || it != kind && it in selected }) },
+                    modifier = control(label),
+                )
+            }
         }
     }
 }
@@ -708,19 +712,20 @@ private fun SendResultDialog(result: SendResultUi, model: R1cordViewModel) {
         title = { Text("Sent") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Sent. Your summary will appear at the link in a few minutes.")
-                if (!result.webdavUrl.isNullOrBlank()) {
+                Text(if (result.pageUrl.isNullOrBlank()) "Sent to the desktop server."
+                    else "Sent. Your pages will appear at the link in a few minutes.")
+                if (!result.pageUrl.isNullOrBlank()) {
                     SelectionContainer {
-                        Text(result.webdavUrl, color = Teal, fontFamily = RecorderLabelFace, fontSize = 16.sp)
+                        Text(result.pageUrl, color = Teal, fontFamily = RecorderLabelFace, fontSize = 16.sp)
                     }
                 }
             }
         },
         confirmButton = {
-            if (!result.webdavUrl.isNullOrBlank()) {
+            if (!result.pageUrl.isNullOrBlank()) {
                 TextButton(
-                    onClick = { model.openSummary(result.webdavUrl) },
-                    modifier = control("Open summary"),
+                    onClick = { model.openPage(result.pageUrl) },
+                    modifier = control("Open published page"),
                 ) { Text("OPEN") }
             }
         },

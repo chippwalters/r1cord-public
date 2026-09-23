@@ -210,12 +210,12 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
 
     fun closeSendSheet() { mutableState.update { it.copy(sendSheetFor = null) } }
 
-    fun send(id: String, title: String, summarize: Boolean, publish: Boolean, style: String) {
+    fun send(id: String, title: String, reviews: Collection<String>, publish: Boolean) {
         if (state.value.isCapturing) { showError("Stop recording before sending."); return }
         if (state.value.upload != null) return
         closeSendSheet()
         startUpload {
-            val result = graph.uploadCoordinator.send(id, title, summarize, publish, style) { progress ->
+            val result = graph.uploadCoordinator.send(id, title, reviews, publish) { progress ->
                 mutableState.update {
                     it.copy(
                         upload = UploadUiState(
@@ -229,7 +229,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                     )
                 }
             }
-            mutableState.update { it.copy(sendResult = SendResultUi(result.recordingId, result.webdavUrl)) }
+            mutableState.update { it.copy(sendResult = SendResultUi(result.recordingId, result.pages.primaryPage()?.url)) }
             notifySent(result)
         }
     }
@@ -244,13 +244,12 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
         val items = state.value.recordings.filter { it.status == "SAVED" && deviceBadge(it.jobStatus) == "local" }
         if (items.isEmpty()) { showError("Nothing to send."); return }
         val app = getApplication<Application>()
-        val summarize = OffloadSettings.defaultSummarize(app)
+        val reviews = OffloadSettings.defaultReviews(app)
         val publish = OffloadSettings.defaultPublish(app)
-        val style = OffloadSettings.defaultStyle(app)
         startUpload {
             var last: SendResult? = null
             items.forEachIndexed { index, item ->
-                val result = graph.uploadCoordinator.send(item.id, item.title, summarize, publish, style) { progress ->
+                val result = graph.uploadCoordinator.send(item.id, item.title, reviews, publish) { progress ->
                     val prefix = "${index + 1} of ${items.size}"
                     mutableState.update {
                         it.copy(
@@ -269,7 +268,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                 last = result
             }
             last?.let { result ->
-                mutableState.update { it.copy(sendResult = SendResultUi(result.recordingId, result.webdavUrl)) }
+                mutableState.update { it.copy(sendResult = SendResultUi(result.recordingId, result.pages.primaryPage()?.url)) }
             }
         }
     }
@@ -293,7 +292,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                 val statuses = withContext(Dispatchers.IO) { graph.offloadClient.recordings() }
                 withContext(Dispatchers.IO) {
                     statuses.forEach { status ->
-                        graph.library.updateJobStatus(status.recordingId, deviceBadge(status.status), status.webdavUrl)
+                        graph.library.updateJobStatus(status.recordingId, deviceBadge(status.status), status.webdavUrl, status.pages)
                     }
                 }
             } catch (e: Exception) {
@@ -337,8 +336,8 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
         mutableState.update { it.copy(paired = false, serverName = "", pairing = null) }
     }
 
-    /** Shows a published summary page in the in-app viewer; the device's browser is not used. */
-    fun openSummary(url: String) {
+    /** Shows a published page in the in-app viewer; the device's browser is not used. */
+    fun openPage(url: String) {
         val scheme = Uri.parse(url).scheme?.lowercase(Locale.ROOT)
         if (scheme != "https" && scheme != "http") { showError("Not a web link: $url"); return }
         graph.playback.stop()
@@ -371,10 +370,12 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                     description = "Shown when a recording has been sent to the desktop server."
                 }
             )
-            val text = "Sent. Your summary will appear at the link in a few minutes."
+            val url = result.pages.primaryPage()?.url
+            val text = if (url != null) "Sent. Your pages will appear at the link in a few minutes."
+                else "Sent to the desktop server."
             val intent = Intent(app, com.chippwalters.r1cord.MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            if (!result.webdavUrl.isNullOrBlank()) intent.putExtra(com.chippwalters.r1cord.MainActivity.EXTRA_SUMMARY_URL, result.webdavUrl)
+            if (url != null) intent.putExtra(com.chippwalters.r1cord.MainActivity.EXTRA_PAGE_URL, url)
             val pending = PendingIntent.getActivity(
                 app,
                 result.recordingId.hashCode(),

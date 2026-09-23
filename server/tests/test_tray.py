@@ -5,8 +5,10 @@ from types import SimpleNamespace
 from r1cord_server.tray import NOTIFY_MESSAGE_MAX, TOOLTIP_MAX, device_line, finished_since, tooltip, work_line
 
 
-def _job(job_id: str, status: str, *, title: str = "Site visit", summarize: bool = True, error: str | None = None):
-    return SimpleNamespace(job_id=job_id, recording_id=f"rec-{job_id}", status=status, title=title, summarize=summarize, error=error)
+def _job(
+    job_id: str, status: str, *, title: str = "Site visit", reviews: tuple[str, ...] = ("summary",), error: str | None = None
+):
+    return SimpleNamespace(job_id=job_id, recording_id=f"rec-{job_id}", status=status, title=title, reviews=reviews, error=error)
 
 
 def test_device_line_prefers_an_adopted_device_and_respects_usb_off() -> None:
@@ -35,9 +37,13 @@ def test_finished_since_announces_only_transitions_into_a_final_state() -> None:
     assert finished_since(seen, [_job("old", "complete"), _job("new", "writing")]) == []
     assert finished_since(seen, [_job("old", "complete"), _job("new", "writing")]) == []
     assert finished_since(seen, [_job("old", "complete"), _job("new", "complete")]) == [("Summary ready", "Site visit")]
-    # Transcribe-only job, then a failure.
-    assert finished_since(seen, [_job("t", "queued", summarize=False)]) == []
-    assert finished_since(seen, [_job("t", "complete", summarize=False)]) == [("Transcript ready", "Site visit")]
+    # Transcribe-only job, several reviews, then a failure.
+    assert finished_since(seen, [_job("t", "queued", reviews=())]) == []
+    assert finished_since(seen, [_job("t", "complete", reviews=())]) == [("Transcript ready", "Site visit")]
+    assert finished_since(seen, [_job("o", "writing", reviews=("organized",))]) == []
+    assert finished_since(seen, [_job("o", "complete", reviews=("organized",))]) == [("Cleaned up & organized ready", "Site visit")]
+    assert finished_since(seen, [_job("m", "writing", reviews=("summary", "outline"))]) == []
+    assert finished_since(seen, [_job("m", "complete", reviews=("summary", "outline"))]) == [("AI reviews ready", "Site visit")]
     assert finished_since(seen, [_job("e", "writing")]) == []
     assert finished_since(seen, [_job("e", "error", error="writer: timeout")]) == [("Job failed", "Site visit: writer: timeout")]
 

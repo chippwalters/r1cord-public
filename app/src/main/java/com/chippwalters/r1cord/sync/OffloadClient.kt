@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
+import com.chippwalters.r1cord.model.PublishedPage
+import com.chippwalters.r1cord.model.resolvePages
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -41,9 +43,9 @@ data class JobRequest(
     val recordingId: String,
     val createdAt: Long,
     val title: String,
-    val summarize: Boolean,
+    /** AI reviews to write, in canonical order; empty = transcript only. */
+    val reviews: List<String>,
     val publish: Boolean,
-    val summaryStyle: String,
     val files: List<FileEntry>,
 )
 
@@ -52,6 +54,7 @@ data class JobCreated(
     val recordingId: String? = null,
     val status: String? = null,
     val webdavUrl: String? = null,
+    val pages: List<PublishedPage> = emptyList(),
     val resumed: Boolean = false,
 )
 
@@ -60,6 +63,7 @@ data class RecordingStatus(
     val jobId: String?,
     val status: String,
     val webdavUrl: String?,
+    val pages: List<PublishedPage>,
     val updatedAt: String?,
 )
 
@@ -205,11 +209,13 @@ class OffloadClient internal constructor(
             val array = JSONArray(text)
             List(array.length()) { index ->
                 val item = array.getJSONObject(index)
+                val webdavUrl = item.optUrl("webdavUrl")
                 RecordingStatus(
                     recordingId = item.getString("recordingId"),
                     jobId = item.optString("jobId").takeIf { it.isNotBlank() && it != "null" },
                     status = item.optString("status"),
-                    webdavUrl = item.optString("webdavUrl").takeIf { it.isNotBlank() && it != "null" },
+                    webdavUrl = webdavUrl,
+                    pages = resolvePages(parsePages(item), webdavUrl),
                     updatedAt = item.optString("updatedAt").takeIf { it.isNotBlank() && it != "null" },
                 )
             }
@@ -226,9 +232,10 @@ class OffloadClient internal constructor(
             .put("recordingId", job.recordingId)
             .put("createdAt", job.createdAt)
             .put("title", job.title)
-            .put("summarize", job.summarize)
+            .put("reviews", JSONArray(job.reviews))
+            // Servers before AI reviews ignore `reviews`; `summarize` keeps them summarizing.
+            .put("summarize", job.reviews.isNotEmpty())
             .put("publish", job.publish)
-            .put("summaryStyle", job.summaryStyle)
             .put("files", files)
     }
 
@@ -236,13 +243,27 @@ class OffloadClient internal constructor(
         val json = parseObject(text)
         val jobId = json.optString("jobId").takeIf { it.isNotBlank() }
             ?: throw OffloadException("Server did not return a job id.")
+        val webdavUrl = json.optUrl("webdavUrl")
         return JobCreated(
             jobId = jobId,
             recordingId = json.optString("recordingId").takeIf { it.isNotBlank() },
             status = json.optString("status").takeIf { it.isNotBlank() },
-            webdavUrl = json.optString("webdavUrl").takeIf { it.isNotBlank() && it != "null" },
+            webdavUrl = webdavUrl,
+            pages = resolvePages(parsePages(json), webdavUrl),
             resumed = resumed,
         )
+    }
+
+    private fun JSONObject.optUrl(name: String): String? = optString(name).takeIf { it.isNotBlank() && it != "null" }
+
+    /** The `pages` array of a job or recording; null when the server sends none (before AI reviews). */
+    private fun parsePages(json: JSONObject): List<PublishedPage>? {
+        val array = json.optJSONArray("pages") ?: return null
+        return List(array.length()) { array.optJSONObject(it) }.mapNotNull { page ->
+            val kind = page?.optString("kind").orEmpty()
+            val url = page?.optUrl("url") ?: return@mapNotNull null
+            PublishedPage(kind, url)
+        }
     }
 
     private fun request(

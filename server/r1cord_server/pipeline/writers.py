@@ -1,4 +1,4 @@
-"""Claude Code / Codex / Grok Build adapters and summary.md validation."""
+"""Claude Code / Codex / Grok Build adapters, `<kind>.md` validation, and the transcript page."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ _IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 
 
 class WriterError(Exception):
-    """Writer CLI failed, timed out, or summary.md is missing/invalid."""
+    """Writer CLI failed, timed out, or `<kind>.md` is missing/invalid."""
 
 
 class WriterConfig(Protocol):
@@ -101,19 +101,20 @@ def _image_target_path(work_dir: Path, target: str) -> Path | None:
     return candidate
 
 
-def validate_summary(work_dir: Path, log: Callable[[str], None]) -> Path:
-    """Require a non-empty summary.md; rewrite broken images; ensure [brand-header]."""
+def validate_review(work_dir: Path, kind: str, log: Callable[[str], None]) -> Path:
+    """Require a non-empty `<kind>.md`; rewrite image links that do not resolve to a listed photo."""
     work_dir = Path(work_dir)
-    path = work_dir / "summary.md"
+    name = f"{kind}.md"
+    path = work_dir / name
     if not path.is_file():
         tail = _tail_writer_log(work_dir)
         extra = f"\n{tail}" if tail else ""
-        raise WriterError(f"summary.md missing at {path}{extra}")
+        raise WriterError(f"{name} missing at {path}{extra}")
     raw = path.read_text(encoding="utf-8")
     if not raw.strip():
         tail = _tail_writer_log(work_dir)
         extra = f"\n{tail}" if tail else ""
-        raise WriterError(f"summary.md is empty at {path}{extra}")
+        raise WriterError(f"{name} is empty at {path}{extra}")
 
     def _replace(match: re.Match[str]) -> str:
         alt, target = match.group(1), match.group(2)
@@ -124,15 +125,6 @@ def validate_summary(work_dir: Path, log: Callable[[str], None]) -> Path:
         return f"*{alt}*"
 
     new = _IMAGE_RE.sub(_replace, raw)
-    lines = new.splitlines()
-    first_nonempty = next((ln.strip() for ln in lines if ln.strip()), "")
-    if first_nonempty != "[brand-header]":
-        log("inserted [brand-header] as first line")
-        new = "[brand-header]\n" + new
-        if not new.endswith("\n") and raw.endswith("\n"):
-            new += "\n"
-    elif not new.endswith("\n") and raw.endswith("\n"):
-        new += "\n"
     if new != raw:
         path.write_text(new, encoding="utf-8")
     return path
@@ -186,15 +178,17 @@ def _argv_for(writer: str, work_dir: Path, config: WriterConfig) -> list[str]:
     raise WriterError(f"unknown writer: {writer!r} (expected claude_code|codex|grok_build)")
 
 
-def summarize(
+def run_writer(
     work_dir: Path,
     *,
+    kind: str,
     writer: str,
     timeout_s: int,
     config: WriterConfig,
     log: Callable[[str], None],
 ) -> Path:
-    """Run the writer CLI in `work_dir` and return the validated summary.md path."""
+    """Run the writer CLI in `work_dir` (holding that review's INSTRUCTIONS.md) and return the
+    validated `<kind>.md` path."""
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
     argv = _argv_for(writer, work_dir, config)
@@ -224,4 +218,33 @@ def summarize(
         tail = _tail_writer_log(work_dir)
         extra = f"\n{tail}" if tail else ""
         raise WriterError(f"writer {writer} exited {rc}{extra}")
-    return validate_summary(work_dir, log)
+    return validate_review(work_dir, kind, log)
+
+
+_MD_SPECIAL = re.compile(r"([\\`*_\[\]<>#|])")
+_MD_LINE_START = re.compile(r"^(\s*)(?:([-+])|(\d+)([.)]))(?=\s|$)", re.MULTILINE)
+
+
+def _escape_markdown(text: str) -> str:
+    """Spoken words, not Markdown: keep a transcript line from turning into a heading, list,
+    quote, link or tag when the page is rendered."""
+    text = _MD_SPECIAL.sub(r"\\\1", text)
+
+    def _line_start(m: re.Match[str]) -> str:
+        if m.group(2):
+            return f"{m.group(1)}\\{m.group(2)}"
+        return f"{m.group(1)}{m.group(3)}\\{m.group(4)}"
+
+    return _MD_LINE_START.sub(_line_start, text)
+
+
+def transcript_markdown(title: str, when: str, transcript: str) -> str:
+    """The transcript page source: `# title`, a date · duration line, then the transcript's
+    paragraphs."""
+    paragraphs = [p.strip() for p in transcript.replace("\r\n", "\n").split("\n\n") if p.strip()]
+    body = "\n\n".join(_escape_markdown(p) for p in paragraphs)
+    parts = [f"# {title}", ""]
+    if when:
+        parts += [f"*{when}*", ""]
+    parts.append(body or "*No speech was recognized.*")
+    return "\n".join(parts) + "\n"

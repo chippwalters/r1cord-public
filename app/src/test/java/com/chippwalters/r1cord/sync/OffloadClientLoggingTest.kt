@@ -44,9 +44,8 @@ class OffloadClientLoggingTest {
         recordingId = "rec-1",
         createdAt = 1L,
         title = "T",
-        summarize = true,
+        reviews = listOf("summary"),
         publish = false,
-        summaryStyle = "notes",
         files = listOf(FileEntry("audio.m4a", 1L, "aa")),
     )
 

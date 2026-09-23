@@ -6,14 +6,13 @@
 <form method="post" action="/admin/import" class="stack">
   <label>Folder path <input type="text" name="folder" required placeholder="D:\path\to\recording"></label>
   <label>Title (optional) <input type="text" name="title"></label>
-  <label>Style
-    <select name="summary_style">
-      <option value="notes">notes</option>
-      <option value="minutes">minutes</option>
-      <option value="article">article</option>
-    </select>
-  </label>
-  <label class="check"><input type="checkbox" name="summarize" value="on" checked> Summarize</label>
+  <fieldset class="review-defaults">
+    <legend>AI reviews</legend>
+    <input type="hidden" name="reviews" value="">
+    {% for kind in review_kinds %}
+    <label class="check"><input type="checkbox" name="reviews" value="{{ kind }}" {% if kind in config.default_reviews %}checked{% endif %}> {{ labels[kind] }}</label>
+    {% endfor %}
+  </fieldset>
   <label class="check"><input type="checkbox" name="publish" value="on" checked> Publish</label>
   <button type="submit">Import and queue</button>
 </form>

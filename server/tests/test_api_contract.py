@@ -74,8 +74,10 @@ def _job_body(
     photo: bool = False,
     publish: bool = True,
     title: str = "Site visit",
+    reviews: list[str] | None = None,
 ) -> dict:
     files = [{"name": "audio.m4a", "size": size, "sha256": sha}]
+    reviews = ["summary"] if reviews is None else reviews
     if photo:
         files.append({"name": "photo-abc123.jpg", "size": len(PHOTO), "sha256": PHOTO_SHA})
     return {
@@ -84,9 +86,10 @@ def _job_body(
             "recordingId": recording_id,
             "createdAt": CREATED_AT,
             "title": title,
-            "summarize": True,
+            # What a current app sends: reviews, plus summarize for servers from before reviews.
+            "reviews": reviews,
+            "summarize": bool(reviews),
             "publish": publish,
-            "summaryStyle": "notes",
             "files": files,
         },
         "metadata": {"id": recording_id, "title": title, "createdAt": CREATED_AT},
@@ -216,7 +219,7 @@ def test_revoked_token_is_rejected(client) -> None:
         pytest.param(lambda b: b["job"].update(recordingId=""), id="recording-id-empty"),
         pytest.param(lambda b: b["job"].update(recordingId=".."), id="recording-id-dotdot"),
         pytest.param(lambda b: b["job"].update(recordingId=" padded "), id="recording-id-padded"),
-        pytest.param(lambda b: b["job"].update(summaryStyle="poem"), id="unknown-style"),
+        pytest.param(lambda b: b["job"].update(reviews="summary"), id="reviews-not-a-list"),
         pytest.param(lambda b: b["job"]["files"][0].update(sha256="nothex"), id="bad-sha256"),
         pytest.param(lambda b: b["job"]["files"][0].update(name="audio file.m4a"), id="name-space"),
         pytest.param(lambda b: b["job"]["files"][0].update(name="notes.txt"), id="name-unlisted"),
@@ -255,6 +258,42 @@ def test_create_job_rejects_each_invalid_manifest(client, case) -> None:
     payload = r.json()
     assert payload["error"] == "invalid_request"
     assert payload["message"]
+
+
+@pytest.mark.parametrize(
+    ("job_fields", "expected"),
+    [
+        pytest.param({"summarize": True, "summaryStyle": "minutes"}, ["summary"], id="legacy-summarize"),
+        pytest.param({"summarize": False, "summaryStyle": "article"}, [], id="legacy-transcript-only"),
+        pytest.param({}, ["summary"], id="legacy-defaults"),
+        pytest.param({"summaryStyle": "poem"}, ["summary"], id="legacy-style-ignored"),
+        pytest.param({"reviews": ["organized", "summary", "organized"], "summarize": True}, ["summary", "organized"], id="canonical"),
+        pytest.param({"reviews": [], "summarize": True}, [], id="reviews-win-over-summarize"),
+    ],
+)
+def test_create_job_reviews_and_the_legacy_summarize_fallback(client, job_fields, expected) -> None:
+    c, app = client
+    token = _token(c, app)
+    body = _job_body("rec-legacy")
+    for key in ("reviews", "summarize"):
+        del body["job"][key]
+    body["job"].update(job_fields)
+    r = c.post("/v1/jobs", headers=_auth(token), json=body)
+    assert r.status_code == 202, r.text
+    result = c.get(f"/v1/jobs/{r.json()['jobId']}", headers=_auth(token)).json()
+    assert result["reviews"] == expected
+    assert "summarize" not in result and "summaryStyle" not in result
+    page = "summary.html" if "summary" in expected else "transcript.html"
+    assert r.json()["webdavUrl"].endswith(f"/{page}") and result["webdavUrl"] == r.json()["webdavUrl"]
+
+
+def test_create_job_rejects_an_unknown_review_with_400(client) -> None:
+    c, app = client
+    token = _token(c, app)
+    r = c.post("/v1/jobs", headers=_auth(token), json=_job_body("rec-bad", reviews=["summary", "haiku"]))
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_request" and "haiku" in r.json()["message"]
+    assert app.state.store.latest_for("rec-bad") is None
 
 
 def test_create_job_response_and_publish_flag(client) -> None:
@@ -530,7 +569,21 @@ def test_recordings_listing_latest_per_recording_newest_first(client, monkeypatc
     assert by_id["rec-old"]["status"] == "queued"
     assert by_id["rec-old"]["webdavUrl"].endswith("/summary.html")
     assert by_id["rec-new"]["webdavUrl"] is None  # publish=false hides the predicted URL
-    assert all(set(r) == {"recordingId", "jobId", "status", "webdavUrl", "updatedAt"} for r in rows)
+    assert all(set(r) == {"recordingId", "jobId", "status", "webdavUrl", "pages", "updatedAt"} for r in rows)
+    assert by_id["rec-old"]["pages"] == []  # nothing published yet
+
+    folder = Path(app.state.store.job(old_id).publish_folder)
+    folder.mkdir(parents=True)
+    (folder / "summary.html").write_text("page", encoding="utf-8")
+    (folder / "transcript.html").write_text("page", encoding="utf-8")
+    rows = {row["recordingId"]: row for row in c.get("/v1/recordings", headers=_auth(token)).json()}
+    page_base = by_id["rec-old"]["webdavUrl"].rsplit("/", 1)[0]
+    expected = [
+        {"kind": "transcript", "url": f"{page_base}/transcript.html"},
+        {"kind": "summary", "url": f"{page_base}/summary.html"},
+    ]
+    assert rows["rec-old"]["pages"] == expected
+    assert c.get("/v1/recordings/rec-old", headers=_auth(token)).json()["pages"] == expected
 
 
 def test_get_recording_returns_latest_job(client) -> None:
@@ -579,6 +632,11 @@ def test_retry_writer_input_validation(client) -> None:
     assert bad_writer.status_code == 422
     assert bad_writer.json()["error"] == "invalid_request"
 
+    for reviews in (["poem"], [], "summary"):
+        bad_reviews = c.post(f"/v1/jobs/{job_id}/retry-writer", headers=_auth(token), json={"reviews": reviews})
+        assert bad_reviews.status_code == 422, reviews
+        assert bad_reviews.json()["error"] == "invalid_request"
+
 
 def test_retry_writer_allowed_and_refused_states(client) -> None:
     c, app = client
@@ -609,8 +667,15 @@ def test_retry_writer_allowed_and_refused_states(client) -> None:
     assert ok.json()["status"] == "queued"
     rec = app.state.store.job(job_id)
     assert rec is not None
-    assert rec.writer == "codex"
+    assert rec.writer == "codex" and rec.reviews == ("summary",)  # reviews default to the job's
     assert rec.skip_asr is True
+
+    app.state.store.set_status(job_id, "complete")
+    chosen = c.post(
+        f"/v1/jobs/{job_id}/retry-writer", headers=_auth(token), json={"reviews": ["organized", "outline"]}
+    )
+    assert chosen.status_code == 200
+    assert c.get(f"/v1/jobs/{job_id}", headers=_auth(token)).json()["reviews"] == ["outline", "organized"]
 
 
 def test_retry_publish_allowed_and_refused(client) -> None:
@@ -624,13 +689,13 @@ def test_retry_publish_allowed_and_refused(client) -> None:
     _put(c, token, job_id, "audio.m4a", 0, AUDIO)
     _commit(c, token, job_id)
 
-    no_summary = c.post(f"/v1/jobs/{job_id}/retry-publish", headers=_auth(token))
-    assert no_summary.status_code == 409
-    assert no_summary.json()["error"] == "retry_not_allowed"
-    assert "summary" in no_summary.json()["message"]
+    nothing = c.post(f"/v1/jobs/{job_id}/retry-publish", headers=_auth(token))
+    assert nothing.status_code == 409
+    assert nothing.json()["error"] == "retry_not_allowed"
+    assert "nothing to publish" in nothing.json()["message"]
 
-    (app.state.store.outbox_dir("rec-rp") / "summary.md").write_text(
-        "# Summary", encoding="utf-8"
+    (app.state.store.outbox_dir("rec-rp") / "transcript.txt").write_text(
+        "hello", encoding="utf-8"
     )
     ok = c.post(f"/v1/jobs/{job_id}/retry-publish", headers=_auth(token))
     assert ok.status_code == 200
@@ -683,7 +748,7 @@ def test_422_logs_machine_code_and_route(client, caplog) -> None:
     c, app = client
     token = _token(c, app)
     body = _job_body("rec-log")
-    body["job"]["summaryStyle"] = "haiku"
+    body["job"]["title"] = "   "
     with caplog.at_level(logging.INFO, logger="r1cord_server.api"):
         r = c.post("/v1/jobs", headers=_auth(token), json=body)
     assert r.status_code == 422
