@@ -1,6 +1,6 @@
 [project]
 name = "r1cord-server"
-version = "0.3.3"
+version = "0.3.4"
 description = "Desktop offload server for the R1CORD recorder: upload, faster-whisper transcription, agent-written AI reviews, themed static pages."
 requires-python = ">=3.12"
 dependencies = [

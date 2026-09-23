@@ -60,7 +60,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     app = create_app(cfg, config_path=config_path)
     usb = FakeUsb()
     app.state.usb = usb
-    with TestClient(app, client=("127.0.0.1", 50000)) as client:
+    with TestClient(app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1:8765") as client:
         yield SimpleNamespace(
             client=client, app=app, store=app.state.store, usb=usb, tmp=tmp_path, config_path=config_path
         )

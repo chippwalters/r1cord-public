@@ -680,6 +680,35 @@ class JobStore:
             ).fetchone()
             return self._job_from_row(row) if row else None
 
+    def recover_interrupted(self) -> list[tuple[str, str, str]]:
+        """Requeue jobs a previous run left mid-pipeline; call before the worker starts.
+
+        The worker owns a job from `transcribing` to `published`; if the server stopped in
+        between, nothing else would ever move the job on and its recording would answer
+        `job_active` forever. Returns `(job_id, was, now)` for each job it moved.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT job_id, recording_id, status, publish FROM jobs WHERE status IN (?, ?, ?, ?, ?, ?)",
+                ("transcribing", "transcribed", "writing", "written", "publishing", "published"),
+            ).fetchall()
+        moved: list[tuple[str, str, str]] = []
+        for row in rows:
+            job_id, was = str(row["job_id"]), str(row["status"])
+            has_transcript = (self.outbox_dir(str(row["recording_id"])) / "transcript.txt").is_file()
+            if was == "published" or (was == "written" and not int(row["publish"])):
+                self.set_status(job_id, "complete")  # the last step had finished
+            elif was in ("written", "publishing"):
+                self.set_status(job_id, "queued", skip_asr=True, only_publish=True)
+            elif was in ("transcribed", "writing") and has_transcript:
+                self.set_status(job_id, "queued", skip_asr=True, only_publish=False)
+            else:
+                self.set_status(job_id, "queued", skip_asr=False, only_publish=False)
+            now = str(self.job(job_id).status)  # type: ignore[union-attr]
+            self.append_log(job_id, f"recovered after a server restart: was {was}, now {now}")
+            moved.append((job_id, was, now))
+        return moved
+
     def set_status(
         self,
         job_id: str,

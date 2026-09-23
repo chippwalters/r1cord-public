@@ -71,6 +71,10 @@ def create_app(config: Config, config_path: Path | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        for job_id, was, now in store.recover_interrupted():
+            logging.getLogger("r1cord_server.app").warning(
+                "job %s was left %s by the previous run; now %s", job_id, was, now
+            )
         worker.start()
         usb.start()
         yield

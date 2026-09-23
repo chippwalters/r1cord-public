@@ -3,6 +3,14 @@
 Versions are the app's `versionName`; the desktop companion carries its own version in
 `server/pyproject.toml` and is noted where it changed.
 
+## Companion 0.3.4 (beta) — security fix and restart recovery
+
+- **Security:** web pages open in your browser can no longer reach the companion's admin page
+  (DNS rebinding and cross-site form posts are refused). Update if you run 0.3.3.
+- A job that was running when the companion stopped is picked up again at the next start instead
+  of staying stuck.
+- Still beta; the new cross-platform companion (Windows, macOS, Linux) is on its way.
+
 ## 0.3.3 (beta) — AI reviews, Transcript pages, server-rendered pages with themes (companion 0.3.3)
 
 This is a **beta** release of both the app and the desktop companion. A new cross-platform

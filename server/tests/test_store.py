@@ -870,3 +870,44 @@ def test_add_review_queues_a_writer_only_job_that_follows_the_latest_publish(tmp
         store.add_review("rec-add", "summary")
     with pytest.raises(StoreError, match="unknown recording"):
         store.add_review("rec-none", "summary")
+
+
+def test_restart_recovery_moves_on_every_job_the_previous_run_left_in_flight(tmp_path: Path) -> None:
+    """A server stopped mid-job must not leave the recording answering job_active forever."""
+    store = JobStore(_cfg(tmp_path))
+    left = {}
+    for rid, status, transcript in [
+        ("rec-t", "transcribing", False),
+        ("rec-w", "writing", True),
+        ("rec-wx", "writing", False),  # no transcript on disk: it has to be made again
+        ("rec-p", "publishing", True),
+        ("rec-d", "published", True),
+    ]:
+        left[rid] = _finished_job(store, rid, status).job_id
+        if transcript:
+            store.outbox_dir(rid).mkdir(parents=True, exist_ok=True)
+            (store.outbox_dir(rid) / "transcript.txt").write_text("words", encoding="utf-8")
+    spec, data = _audio_spec(b"private-audio")
+    private = store.create_job(_valid_request(spec, recording_id="rec-np", publish=False), {"id": "rec-np"})
+    store.append_file(private.job_id, spec.name, 0, iter([data]))
+    store.commit(private.job_id)
+    store.set_status(private.job_id, "written")
+    settled = {rid: _finished_job(store, rid, st).job_id for rid, st in [("rec-q", "queued"), ("rec-c", "complete"), ("rec-e", "error")]}
+
+    moved = {job_id: (was, now) for job_id, was, now in store.recover_interrupted()}
+
+    def state(job_id: str) -> tuple[str, bool, bool]:
+        rec = store.job(job_id)
+        return rec.status, rec.skip_asr, rec.only_publish
+
+    assert state(left["rec-t"]) == ("queued", False, False)  # transcribe again
+    assert state(left["rec-w"]) == ("queued", True, False)  # rewrite reviews from the transcript
+    assert state(left["rec-wx"]) == ("queued", False, False)
+    assert state(left["rec-p"]) == ("queued", True, True)  # publish only
+    assert state(left["rec-d"])[0] == "complete"  # the last step had finished
+    assert state(private.job_id)[0] == "complete"  # written and nothing to publish
+    assert set(moved) == set(left.values()) | {private.job_id}
+    assert moved[left["rec-p"]] == ("publishing", "queued")
+    assert {rid: store.job(j).status for rid, j in settled.items()} == {"rec-q": "queued", "rec-c": "complete", "rec-e": "error"}
+    assert any("recovered after a server restart: was writing" in line for line in store.read_log(left["rec-w"]))
+    assert store.recover_interrupted() == []  # nothing left in flight

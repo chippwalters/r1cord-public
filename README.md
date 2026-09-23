@@ -3,7 +3,7 @@
 **This repository is the source code.** If you just want to install R1CORD, you do not need
 anything here — go to **https://www.widgetgadget.com/cw1/R1CORD/** and download it.
 
-> **Beta.** Version 0.3.3 of the app and the desktop companion is a beta release. A new
+> **Beta.** The app (0.3.3) and the desktop companion (0.3.4) are beta releases. A new
 > cross-platform architecture for the desktop companion (Windows, macOS and Linux) is coming soon;
 > today's companion is Windows-only.
 
@@ -104,7 +104,7 @@ Details, settings and the Wi-Fi alternative are in the
 [user guide](docs/user-guide.md#using-the-desktop-companion); the server's own
 [README](server/README.md) covers configuration and internals.
 
-Tests (no GPU or device needed): `server\.venv\Scripts\python.exe -m pytest -q` (325 companion tests) and
+Tests (no GPU or device needed): `server\.venv\Scripts\python.exe -m pytest -q` (327 companion tests) and
 `.\gradlew.bat :app:testDebugUnitTest` (100 app tests on the JVM, Robolectric).
 
 ## Design notes

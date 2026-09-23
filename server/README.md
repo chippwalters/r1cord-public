@@ -55,7 +55,7 @@ While the server runs on Windows it shows the R1CORD logomark in the notificatio
 
 When a job finishes the icon shows a Windows notification with the recording title: *Transcript ready* (no AI reviews), *<Review> ready* (one review, e.g. *Summary ready*), *AI reviews ready* (several) or *Job failed*. Windows 11 puts new tray icons in the hidden-icons overflow (`^`); to keep it on the taskbar, drag it out of the overflow or turn it on under **Settings → Personalization → Taskbar → Other system tray icons** (listed as *Python* / *pythonw*, because the server runs under `pythonw.exe`). `--no-tray` or `R1CORD_NO_TRAY=1` starts the server without the icon.
 
-**Login:** none when you open the admin page on this PC. The HTTP Basic password (`admin` / `admin_password`, shown on the Settings page) is only asked for when the page is reached through a tunnel or proxy (`CF-Connecting-IP` / `X-Forwarded-For` present).
+**Login:** none when you open the admin page on this PC. The HTTP Basic password (`admin` / `admin_password`, shown on the Settings page) is only asked for when the page is reached through a tunnel or proxy (`CF-Connecting-IP` / `X-Forwarded-For` present). Web pages cannot use your browser to reach the admin: a request must address this PC as `127.0.0.1` or `localhost` (no DNS-rebinding), and a form post from another site is refused (`403`). If the server stops in the middle of a job, the job is picked up again at the next start instead of staying stuck.
 
 Default listen address is `127.0.0.1:8765`. Do not bind `0.0.0.0` unless you set `listen_host` on purpose.
 

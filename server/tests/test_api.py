@@ -205,11 +205,39 @@ def test_admin_open_on_loopback_but_basic_through_a_proxy(tmp_path: Path, monkey
         assert remote.get("/admin").status_code == 401
         assert remote.get("/admin", auth=("admin", "wrong")).status_code == 401
         assert remote.get("/admin", auth=("admin", "test-admin-pass1")).status_code == 200
-    with TestClient(app, client=("127.0.0.1", 50000)) as local:
+    with TestClient(app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1:8765") as local:
         assert local.get("/admin").status_code == 200
         # Same loopback socket, but the request came through cloudflared: password required.
         assert local.get("/admin", headers={"CF-Connecting-IP": "203.0.113.9"}).status_code == 401
         assert local.get("/admin", headers={"X-Forwarded-For": "203.0.113.9"}, auth=("admin", "test-admin-pass1")).status_code == 200
+
+
+def test_admin_refuses_what_another_web_page_could_make_the_browser_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("r1cord_server.worker.Worker.start", lambda self: None)
+    monkeypatch.setattr("r1cord_server.worker.Worker.stop", lambda self: None)
+    monkeypatch.setattr("r1cord_server.usb.UsbWatcher.start", lambda self: None)
+    cfg = Config(datastore=tmp_path / "ds", webdav_folder=tmp_path / "wd", admin_password="test-admin-pass1")
+    app = create_app(cfg)
+    with TestClient(app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1:8765") as local:
+        # DNS rebinding: evil.example resolves to 127.0.0.1, so the loopback socket sees its name.
+        assert local.get("/admin", headers={"Host": "evil.example:8765"}).status_code == 403
+        assert local.get("/admin", headers={"Host": "localhost:8765"}).status_code == 200
+        # A form on another site posting to the admin.
+        assert local.post("/admin/usb/poll", headers={"Origin": "https://evil.example"}, follow_redirects=False).status_code == 403
+        assert local.post("/admin/usb/poll", headers={"Origin": "null"}, follow_redirects=False).status_code == 403
+        assert local.post("/admin/usb/poll", headers={"Sec-Fetch-Site": "cross-site"}, follow_redirects=False).status_code == 403
+        assert local.post("/admin/usb/poll", headers={"Origin": "http://localhost:8766"}, follow_redirects=False).status_code == 403
+        # The admin's own pages, and clients that are not browsers, still work.
+        own = {"Origin": "http://127.0.0.1:8765", "Sec-Fetch-Site": "same-origin"}
+        assert local.post("/admin/usb/poll", headers=own, follow_redirects=False).status_code == 303
+        assert local.post("/admin/usb/poll", follow_redirects=False).status_code == 303
+        # Through the tunnel the Host is the tunnel's name; a same-origin form there still works.
+        tunnel = {"Host": "r1cord.example.test", "CF-Connecting-IP": "203.0.113.9"}
+        basic = ("admin", "test-admin-pass1")
+        assert local.post("/admin/usb/poll", headers={**tunnel, "Origin": "https://r1cord.example.test"}, auth=basic, follow_redirects=False).status_code == 303
+        assert local.post("/admin/usb/poll", headers={**tunnel, "Origin": "https://evil.example"}, auth=basic, follow_redirects=False).status_code == 403
 
 
 def test_recording_audio_download_and_show_in_folder_stay_on_this_pc(
@@ -228,7 +256,7 @@ def test_recording_audio_download_and_show_in_folder_stay_on_this_pc(
     tunnel = {"CF-Connecting-IP": "203.0.113.9"}
     basic = ("admin", "test-admin-pass1")
 
-    with TestClient(app, client=("127.0.0.1", 50000)) as local:
+    with TestClient(app, client=("127.0.0.1", 50000), base_url="http://127.0.0.1:8765") as local:
         got = local.get("/admin/recordings/rec-audio-1/audio")
         assert got.status_code == 200
         assert got.content == AUDIO

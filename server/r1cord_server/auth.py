@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -12,6 +13,8 @@ from .store import hash_token
 
 _basic = HTTPBasic(realm="r1cord-admin", auto_error=False)
 _PROXY_HEADERS = ("cf-connecting-ip", "x-forwarded-for", "x-real-ip")
+_LOOPBACK_NAMES = {"127.0.0.1", "localhost", "::1"}
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def _deny(message: str) -> HTTPException:
@@ -20,6 +23,40 @@ def _deny(message: str) -> HTTPException:
         status_code=401,
         detail={"error": "unauthorized", "message": message},
     )
+
+
+def _forbidden(message: str) -> HTTPException:
+    return HTTPException(status_code=403, detail={"error": "forbidden", "message": message})
+
+
+def _host_name(host: str) -> str:
+    """"127.0.0.1:8765" -> "127.0.0.1", "[::1]:8765" -> "::1", "localhost" -> "localhost"."""
+    host = host.strip().lower()
+    if host.startswith("["):
+        return host[1 : host.find("]")] if "]" in host else host
+    return host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+
+
+def check_browser_request(request: Request) -> None:
+    """Refuse what a web page on another site could make this PC's browser do to the admin.
+
+    - DNS rebinding: a page on evil.example whose name resolves to 127.0.0.1 reaches the loopback
+      listener with `Host: evil.example`. A local request must name this PC (127.0.0.1/localhost).
+    - Cross-site forms: a page elsewhere can POST to http://127.0.0.1:8765/admin/... (and a browser
+      re-sends tunnel Basic credentials). A state-changing request that says where it came from
+      (Origin, Sec-Fetch-Site) must come from the admin's own origin. Clients that send neither
+      (curl, scripts) are not browsers and are unaffected.
+    """
+    host = request.headers.get("host", "")
+    if is_local_direct(request) and _host_name(host) not in _LOOPBACK_NAMES:
+        raise _forbidden("the admin answers only as 127.0.0.1 or localhost on this PC")
+    if request.method not in _UNSAFE_METHODS:
+        return
+    origin = request.headers.get("origin")
+    if origin is not None and (origin == "null" or urlsplit(origin).netloc.lower() != host.strip().lower()):
+        raise _forbidden("cross-site request refused")
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise _forbidden("cross-site request refused")
 
 
 def is_local_direct(request: Request) -> bool:
@@ -54,6 +91,7 @@ def require_admin(
     request: Request,
     credentials: Annotated[HTTPBasicCredentials | None, Depends(_basic)],
 ) -> str:
+    check_browser_request(request)
     if is_local_direct(request):
         return "admin"
     config = request.app.state.config
