@@ -21,6 +21,7 @@ from r1cord_server.store import (
     JobStore,
     OffsetMismatch,
     RetryNotAllowed,
+    StoreError,
     TooLarge,
     UnknownJob,
     hash_token,
@@ -717,3 +718,57 @@ def test_audio_mismatch_across_different_audio_names(tmp_path: Path) -> None:
     other_wav, _ = _audio_spec(b"different-bytes", name="audio.wav")
     with pytest.raises(AudioMismatch):
         store.create_job(_valid_request(other_wav, recording_id="rec-am"), {"id": "rec-am"})
+
+
+def _rerun(store: JobStore, recording_id: str, status: str) -> JobRecord:
+    """Another job for a recording whose audio is already here: nothing to upload, commit directly."""
+    spec, _ = _audio_spec(b"retry-audio")
+    rec = store.create_job(_valid_request(spec, recording_id=recording_id), {"id": recording_id})
+    store.commit(rec.job_id)
+    store.set_status(rec.job_id, status)
+    return rec
+
+
+def test_delete_recording_removes_this_pcs_copy_and_nothing_outside_the_publish_root(tmp_path: Path) -> None:
+    store = JobStore(_cfg(tmp_path))
+    rec = _finished_job(store, "rec-del", "complete")
+    ds = tmp_path / "ds"
+    published = Path(store.job(rec.job_id).publish_folder)
+    published.mkdir(parents=True)
+    (published / "summary.html").write_text("page", encoding="utf-8")
+    (ds / "work" / "rec-del").mkdir(parents=True, exist_ok=True)
+    store.outbox_dir("rec-del")
+    # A second run whose recorded publish folder points outside webdav_folder (moved config, bad row).
+    second = _rerun(store, "rec-del", "complete")
+    outside = tmp_path / "not-published-here"
+    outside.mkdir()
+    store._conn.execute("UPDATE jobs SET publish_folder = ? WHERE job_id = ?", (str(outside), second.job_id))
+    store._conn.commit()
+
+    store.delete_recording("rec-del")
+
+    for gone in (ds / "inbox" / "rec-del", ds / "outbox" / "rec-del", ds / "work" / "rec-del", published):
+        assert not gone.exists(), gone
+    assert outside.is_dir()
+    assert store.latest_for("rec-del") is None and store.is_deleted("rec-del")
+    # An explicit Send / Import of the same recording clears the mark.
+    _finished_job(store, "rec-del", "queued")
+    assert not store.is_deleted("rec-del")
+
+
+def test_delete_recording_refuses_while_a_job_is_running(tmp_path: Path) -> None:
+    store = JobStore(_cfg(tmp_path))
+    _finished_job(store, "rec-busy", "transcribing")
+    with pytest.raises(StoreError, match="still running"):
+        store.delete_recording("rec-busy")
+    assert (tmp_path / "ds" / "inbox" / "rec-busy").is_dir()
+    assert store.latest_for("rec-busy") is not None and not store.is_deleted("rec-busy")
+
+
+def test_latest_jobs_lists_each_recording_once_with_its_run_count(tmp_path: Path) -> None:
+    store = JobStore(_cfg(tmp_path))
+    _finished_job(store, "rec-a", "complete")
+    newest_a = _rerun(store, "rec-a", "complete")
+    only_b = _finished_job(store, "rec-b", "error")
+    rows = {job.recording_id: (job.job_id, runs) for job, runs in store.latest_jobs()}
+    assert rows == {"rec-a": (newest_a.job_id, 2), "rec-b": (only_b.job_id, 1)}

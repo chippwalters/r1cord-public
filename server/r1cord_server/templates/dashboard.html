@@ -1,151 +1,104 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — r1cord-server{% endblock %}
+{% block title %}Recordings — R1CORD Server{% endblock %}
 {% block body %}
-<h1>Dashboard</h1>
+{% if notice %}<p class="banner banner-bad">{{ notice }}</p>{% endif %}
+{% if deleted %}<p class="banner banner-ok">Deleted {{ deleted }} from this PC. The R1 keeps its own copy.</p>{% endif %}
 
-<section class="card">
-  <h2>Health</h2>
-  <dl class="grid">
-    <dt>claude</dt><dd>{{ health.claude }}</dd>
-    <dt>codex</dt><dd>{{ health.codex }}</dd>
-    <dt>grok</dt><dd>{{ health.grok }}</dd>
-    <dt>adb</dt><dd>{{ health.adb }}</dd>
-    <dt>GPU (ctranslate2)</dt><dd>{{ health.gpu }}</dd>
-    <dt>MD DOCS bridge</dt><dd>{{ health.mddocs }} (port {{ health.mddocs_port }})</dd>
-    <dt>Datastore</dt><dd>{{ health.datastore_space }}</dd>
-    <dt>WebDAV folder</dt><dd>{{ health.webdav_exists }}</dd>
-    <dt>Last job</dt><dd>{{ health.last_job }}</dd>
-  </dl>
+<section class="status-strip" aria-label="Status">
+  <a class="tile" href="/admin/devices">
+    <span class="eyebrow">Device</span>
+    <span class="tile-value"><span class="dot {{ 'dot-ok' if device else 'dot-off' }}"></span>{% if not usb.enabled %}USB mode off{% elif device %}{{ device }} connected{% else %}No device connected{% endif %}</span>
+    <span class="tile-sub">{% if usb.syncing %}Copying {{ usb.syncing }}…{% elif usb.enabled %}New recordings: {{ config.usb_auto_action }}{% else %}Recordings arrive only by Send{% endif %}</span>
+  </a>
+  <div class="tile">
+    <span class="eyebrow">Now</span>
+    {% if running %}
+    <span class="tile-value"><span class="dot dot-work"></span>{{ running_label }} · <a href="/admin/jobs/{{ running.job.job_id }}">{{ running.job.title or running.job.recording_id }}</a></span>
+    <span class="tile-sub">{{ running.elapsed }} in this step</span>
+    {% else %}
+    <span class="tile-value"><span class="dot dot-off"></span>Idle</span>
+    <span class="tile-sub">Nothing is being processed</span>
+    {% endif %}
+  </div>
+  <div class="tile">
+    <span class="eyebrow">Queue</span>
+    <span class="tile-value">{% if queued %}{{ queued }} waiting{% else %}Empty{% endif %}</span>
+    <span class="tile-sub">Jobs run one at a time</span>
+  </div>
+  <a class="tile" href="/admin/system">
+    <span class="eyebrow">System</span>
+    {% if issues %}
+    <span class="tile-value"><span class="dot dot-bad"></span>{{ issues|length }} need{{ 's' if issues|length == 1 }} attention</span>
+    <span class="tile-sub">{{ issues[0].name }}{% if issues|length > 1 %} and {{ issues|length - 1 }} more{% endif %}</span>
+    {% else %}
+    <span class="tile-value"><span class="dot dot-ok"></span>Ready</span>
+    <span class="tile-sub">All checks pass</span>
+    {% endif %}
+  </a>
 </section>
 
-<section class="card">
-  <h2>USB mode</h2>
-  <p>
-    {% if usb.enabled %}<strong class="ok">On</strong>{% else %}<strong class="warn">Off</strong>{% endif %}
-    — adb: <span class="path">{{ usb.adb }}</span>
-    <form method="post" action="/admin/usb/toggle" class="inline">
-      <button type="submit">{% if usb.enabled %}Turn off{% else %}Turn on{% endif %}</button>
-    </form>
-  </p>
-  {% if usb.connected %}
-  <ul>
-    {% for serial, model, adopted in usb.connected %}
-    <li><span class="path">{{ serial }}</span> {{ model }} — {% if adopted %}adopted{% else %}<a href="/admin/devices">not adopted</a>{% endif %}</li>
-    {% endfor %}
-  </ul>
-  {% else %}
-  <p class="muted">No device connected.</p>
-  {% endif %}
-  {% if usb.syncing %}<p>Pulling <span class="path">{{ usb.syncing }}</span>…</p>{% endif %}
-  {% if usb.last_error %}<p class="warn">{{ usb.last_error }}</p>{% endif %}
-  <p class="muted">Auto action: {{ config.usb_auto_action }} · run mode: {{ config.run_mode }}{% if config.run_mode == "plug" %} (exits after {{ config.idle_exit_min }} idle min){% endif %}. <a href="/admin/devices">Devices</a></p>
-</section>
-
-<section class="card">
-  <h2>Running</h2>
-  {% if running %}
-  <p>
-    <a href="/admin/jobs/{{ running.job.job_id }}">{{ running.job.title }}</a>
-    — {{ running.job.status }}
-    — {{ running.elapsed }}
-  </p>
-  <p class="muted">{{ running.last_log }}</p>
-  {% else %}
-  <p class="muted">Idle.</p>
-  {% endif %}
-</section>
-
-<section class="card">
-  <h2>Queue</h2>
-  {% if queue %}
-  <table>
-    <thead><tr><th>Job</th><th>Recording</th><th>Title</th><th>Writer</th></tr></thead>
-    <tbody>
-    {% for j in queue %}
-      <tr>
-        <td><a href="/admin/jobs/{{ j.job_id }}">{{ j.job_id }}</a></td>
-        <td>{{ j.recording_id }}</td>
-        <td>{{ j.title }}</td>
-        <td>{{ j.writer }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="muted">Empty.</p>
-  {% endif %}
-</section>
-
-<section class="card" id="recent">
-  <h2>Recent jobs</h2>
+<section class="panel" id="recordings">
+  <div class="panel-head">
+    <h1 class="eyebrow eyebrow-bar">Recordings <span class="count">{{ rows|length }}</span></h1>
+    <a class="btn btn-secondary btn-small" href="/admin/import">Import a folder</a>
+  </div>
+  {% if rows %}
   <div class="table-scroll">
-  <table>
+  <table class="recordings">
     <thead>
       <tr>
-        <th>Recording</th><th>Title</th><th>Size</th><th>Status</th><th>Writer</th><th>Updated</th><th>Audio</th>
+        <th>Recording</th><th class="num">Length</th><th class="num">Size</th><th>Status</th><th>Writer</th><th>Updated</th><th class="actions-head"><span class="sr-only">Actions</span></th>
       </tr>
     </thead>
     <tbody>
-    {% for j in recent %}
-      {% set size = audio.get(j.recording_id) %}
+    {% for r in rows %}
+      {% set j = r.job %}
       <tr>
-        <td class="nowrap"><a href="/admin/jobs/{{ j.job_id }}">{{ j.recording_id }}</a></td>
-        <td>{{ j.title }}</td>
-        <td class="nowrap">{{ size or "—" }}</td>
-        <td>{{ j.status }}</td>
-        <td>{{ j.writer }}</td>
-        <td class="nowrap" title="{{ j.updated_at }}">{{ j.updated_at[:16] | replace("T", " ") }}Z</td>
+        <td class="rec">
+          <a class="rec-title" href="/admin/jobs/{{ j.job_id }}">{{ j.title or j.recording_id }}</a>
+          <span class="rec-id">{{ j.recording_id }}{% if r.runs > 1 %} · {{ r.runs }} runs{% endif %}</span>
+        </td>
+        <td class="num">{{ r.duration or "—" }}</td>
+        <td class="num">{{ r.size or "—" }}</td>
+        <td><span class="pill pill-{{ r.status_tone }}" {% if j.error %}title="{{ j.error.splitlines()[0] }}"{% endif %}>{{ r.status_label }}</span></td>
+        <td class="mono-cell">{{ j.writer if j.summarize else "—" }}</td>
+        <td class="mono-cell">{{ r.updated }}</td>
         <td class="actions">
-          {% if size %}
+          {% if r.has_audio %}
           {% if local %}
-          <form method="post" action="/admin/recordings/{{ j.recording_id }}/play" title="Open in the default media player">
-            <button type="submit" class="btn-row"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z"/></svg>Play</button>
+          <form method="post" action="/admin/recordings/{{ j.recording_id }}/play">
+            <button type="submit" class="icon-btn" title="Play in your media player" aria-label="Play"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.8v10.4L13 8z"/></svg></button>
           </form>
           {% endif %}
-          <a class="btn-row" href="/admin/recordings/{{ j.recording_id }}/audio" title="Download the audio file"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1h2v7.2l2.6-2.6 1.4 1.4L8 12 3 7l1.4-1.4L7 8.2zM2 13h12v2H2z"/></svg>Download</a>
+          <a class="icon-btn" href="/admin/recordings/{{ j.recording_id }}/audio" title="Download the audio" aria-label="Download"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1.5h2v6.8l2.4-2.4 1.4 1.4L8 12.1 3.2 7.3l1.4-1.4L7 8.3zM2.5 13h11v1.8h-11z"/></svg></a>
           {% if local %}
-          <form method="post" action="/admin/recordings/{{ j.recording_id }}/folder" title="Show the file in Explorer">
-            <button type="submit" class="btn-row"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 3h5l1.5 1.5H15V13H1z"/></svg>Folder</button>
+          <form method="post" action="/admin/recordings/{{ j.recording_id }}/folder">
+            <button type="submit" class="icon-btn" title="Show in Explorer" aria-label="Show in folder"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 3h4.8l1.5 1.5h6.7v8.5h-13z"/></svg></button>
           </form>
           {% endif %}
-          {% else %}<span class="muted">—</span>{% endif %}
+          {% endif %}
+          {% if r.status_tone in ("work", "idle") %}
+          <span class="icon-btn icon-btn-disabled" title="Busy — wait for the job to finish" aria-label="Delete unavailable"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1.5h4l.6 1H14v1.8H2V2.5h3.4zM3.3 5.2h9.4l-.7 9.3H4z"/></svg></span>
+          {% else %}
+          <details class="confirm">
+            <summary class="icon-btn icon-btn-danger" title="Delete from this PC" aria-label="Delete"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 1.5h4l.6 1H14v1.8H2V2.5h3.4zM3.3 5.2h9.4l-.7 9.3H4z"/></svg></summary>
+            <div class="confirm-pop">
+              <p>Delete <strong>{{ j.title or j.recording_id }}</strong> from this PC?</p>
+              <p class="muted">Audio, transcript, summary, published page and job history are removed. The R1 keeps its copy, and USB mode will not copy it back.</p>
+              <form method="post" action="/admin/recordings/{{ j.recording_id }}/delete">
+                <button type="submit" class="btn btn-danger btn-small">Delete recording</button>
+              </form>
+            </div>
+          </details>
+          {% endif %}
         </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
-</section>
-
-<section class="card">
-  <h2>Pairing</h2>
-  <form method="post" action="/admin/pair">
-    <button type="submit">Generate pairing code</button>
-  </form>
-</section>
-
-<section class="card">
-  <h2>Tokens</h2>
-  <table>
-    <thead><tr><th>Id</th><th>Label</th><th>Created</th><th>Last used</th><th>Revoked</th><th></th></tr></thead>
-    <tbody>
-    {% for t in tokens %}
-      <tr>
-        <td>{{ t.id }}</td>
-        <td>{{ t.label }}</td>
-        <td>{{ t.created_at }}</td>
-        <td>{{ t.last_used_at or "—" }}</td>
-        <td>{{ "yes" if t.revoked else "no" }}</td>
-        <td>
-          {% if not t.revoked %}
-          <form method="post" action="/admin/tokens/{{ t.id }}/revoke">
-            <button type="submit">Revoke</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  {% else %}
+  <p class="empty">No recordings yet. Plug in an adopted R1, or press Send on one.</p>
+  {% endif %}
 </section>
 {% endblock %}

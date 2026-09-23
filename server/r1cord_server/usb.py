@@ -433,6 +433,8 @@ class UsbWatcher:
         cfg: Config,
     ) -> None:
         store = self.store
+        if store.is_deleted(recording_id):
+            return  # deleted on the admin page; only an explicit Send brings it back
         meta_listed = files.get("metadata.json")
         if meta_listed is None:
             log.info("usb: %s skipped %s (no metadata.json)", serial, recording_id)

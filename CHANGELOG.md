@@ -3,6 +3,17 @@
 Versions are the app's `versionName`; the desktop companion carries its own version in
 `server/pyproject.toml` and is noted where it changed.
 
+## Companion 0.3.1 — redesigned admin pages; recording length and delete
+
+- **A calmer dashboard.** Four status tiles (device, current job, queue, system) above one
+  **Recordings** list. Wi-Fi pairing and paired-device keys moved to the Devices page; dependency
+  checks moved to a new **System** page that marks each one OK, needs attention, or not in use.
+  Config is now called **Settings**.
+- **Recordings** show one row per recording with its **Length**, size, status and writer, and
+  Play, Download, Folder and **Delete** buttons. Delete asks first, removes the recording and its
+  published page from the PC only, and USB mode will not copy it back; the device keeps its copy.
+- The admin pages follow the CHIPPWALTERS brand, with bundled fonts and the R1CORD logo.
+
 ## 0.3.2 — summaries open in the app; companion tray icon and email (companion 0.3.0)
 
 - **Summaries open inside R1CORD.** Open summary, the "Sent" dialog's Open and the Sent

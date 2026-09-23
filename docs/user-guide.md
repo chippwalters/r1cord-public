@@ -200,7 +200,7 @@ It is optional. The recorder is complete without it.
 
 ### Approving your R1
 
-With USB debugging on (the same setting used to install the app), plug the R1 in. On the admin page, open **Devices** — your R1 appears under *connected, not adopted*. Click **Adopt**.
+With USB debugging on (the same setting used to install the app), plug the R1 in. On the admin page, open **Devices** — your R1 appears under *Connected, not adopted*. Click **Adopt**.
 
 Nothing is ever copied from a device you have not adopted. That is what stops the companion from touching a phone or any other Android device you plug into the same PC.
 
@@ -208,22 +208,28 @@ Nothing is ever copied from a device you have not adopted. That is what stops th
 
 Every time the R1 is plugged in, the admin page opens on your PC and each finished recording is copied across and transcribed. Recordings still in progress are left alone until you press Stop. A recording is never processed twice, and **nothing is ever deleted from the R1** — the companion only reads.
 
-Watch progress on the admin page. Your recordings, transcripts and a log of each job are in:
+Watch progress on the admin page. Across the top, four tiles show whether the R1 is connected, what the companion is working on now, how many jobs are waiting, and whether everything it depends on is ready. The page refreshes itself while a job is running.
+
+Your recordings, transcripts and a log of each job are in:
 
 ```text
 C:\Users\<you>\AppData\Local\R1CORD\data
 ```
 
-with each recording in its own folder: the audio, any photos, and `transcript.txt`. The dashboard's **Recent jobs** list gives you each recording's audio without digging for that folder:
+with each recording in its own folder: the audio, any photos, and `transcript.txt`. The **Recordings** list below the tiles has one row per recording, with its status and the writer that summarised it. Click a recording's name for its transcript, summary and log. Each row also gives you the audio without digging for that folder:
 
-![Recent jobs on the companion's admin page](images/5c1e9a07/recent_jobs.svg)
+![The Recordings list on the companion's admin page](images/5c1e9a07/recent_jobs.svg)
 
-1. **Size** — how big the recording's audio file is.
-2. **Play** — opens the audio in your PC's usual media player.
-3. **Download** — saves a copy through the browser.
-4. **Folder** — opens the folder that holds it, with the file selected.
+1. **Length** — how long the recording is.
+2. **Size** — how big the recording's audio file is.
+3. **Play** — opens the audio in your PC's usual media player.
+4. **Download** — saves a copy through the browser.
+5. **Folder** — opens the folder that holds it, with the file selected.
+6. **Delete** — removes the recording from this PC, after you confirm: the audio, transcript, summary, published page and job history. The copy on the R1 is untouched, and the companion will not copy it back when you plug in again. Delete is greyed out while the recording is being processed.
 
 Play and Folder act on the PC itself, so they only appear when the admin page is open on that PC.
+
+The **System** page lists everything the companion depends on — speech recognition, the summary writers, USB mode, publishing, email and free disk space — each marked *OK*, *Needs attention* or *Not in use*, with a one-line detail. When the System tile at the top of the dashboard says something needs attention, click it to go there.
 
 ### The R1CORD icon in the taskbar
 
@@ -232,8 +238,8 @@ While the companion is running, the R1CORD logo sits in the notification area at
 ![The companion's taskbar icon and its menu](images/5c1e9a07/tray_menu.svg)
 
 1. **Status** — whether the R1 is connected, and what the companion is doing (*Idle*, or the job it is working on).
-2. **Open dashboard** — the admin page. **Devices** and **Config** open those tabs.
-3. **USB mode** and **Email finished jobs** — on/off switches; a tick means on. Email stays greyed out until an address is set on the Config tab.
+2. **Open dashboard** — the admin page. **Devices** and **Settings** open those pages.
+3. **USB mode** and **Email finished jobs** — on/off switches; a tick means on. Email stays greyed out until an address is set on the Settings page.
 4. **Open recordings folder** — and **Open logs folder** below it, for when something needs looking into.
 5. **Quit R1CORD Server** — stops the companion until you start it again.
 6. **The icon** — the R1CORD logomark.
@@ -244,11 +250,11 @@ Windows 11 hides new icons behind the **^** arrow at first. To keep R1CORD's in 
 
 ### Getting each summary by email
 
-If the PC has Google's `gws` command-line tool installed and signed in to your Gmail, the companion can email you each finished job: the summary (or the transcript, for a transcribe-only job), plus a link to the published page. On the admin page's **Config** tab, fill in **email_to** and tick **email_enabled**; the **Email summary** button on any job's page sends one by hand. Email is off until you turn it on.
+If the PC has Google's `gws` command-line tool installed and signed in to your Gmail, the companion can email you each finished job: the summary (or the transcript, for a transcribe-only job), plus a link to the published page. On the admin page's **Settings** page, fill in **email_to** and tick **email_enabled**; the **Email summary** button on any job's page sends one by hand. Email is off until you turn it on.
 
 ### Settings worth knowing
 
-On the admin page's **Config** tab:
+On the admin page's **Settings** page:
 
 - **What to do with new recordings** (`usb_auto_action`) — `transcribe` is the default. `archive` copies files without transcribing.
 - **Speech model** (`asr_model`) — the default is the most accurate one and downloads about 1.6 GB the first time it runs. If transcription is too slow on your PC, choose `small` or `medium`.
@@ -260,7 +266,7 @@ Two further features exist for people who have the extra pieces: written **summa
 
 ### Sending over Wi-Fi instead
 
-If you would rather not plug in, the R1 can upload over your network. On the admin page click **Generate pairing code**; on the R1, Settings → Desktop server, enter your PC's address as the **Server URL** and the six-digit code. After that, **SEND** on any recording uploads it. This needs the PC reachable from the R1 — the same Wi-Fi network, or your own remote-access setup (a tunnel to the PC works from anywhere, as long as the PC, the companion and the tunnel are all running). With no working connection at all, SEND goes over the USB cable instead, when the R1 is plugged into the PC.
+If you would rather not plug in, the R1 can upload over your network. On the admin page, open **Devices** and click **Generate pairing code** under *Wi-Fi pairing*; on the R1, Settings → Desktop server, enter your PC's address as the **Server URL** and the six-digit code. After that, **SEND** on any recording uploads it. This needs the PC reachable from the R1 — the same Wi-Fi network, or your own remote-access setup (a tunnel to the PC works from anywhere, as long as the PC, the companion and the tunnel are all running). With no working connection at all, SEND goes over the USB cable instead, when the R1 is plugged into the PC. A lost R1 can be locked out from the same panel: **Revoke** its key.
 
 ## Turning the R1 off, and reaching Android settings
 

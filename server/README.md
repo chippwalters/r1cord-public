@@ -27,9 +27,9 @@ Windows 10/11. Unzip (or clone) this folder anywhere, then double-click **`insta
 
 Nothing is installed system-wide except Python (only if you said yes) and the shortcut. `uninstall.bat` removes the venv, `tools\`, the shortcut and any scheduled task; it keeps your config and recordings.
 
-Then on the R1: **Developer options → USB debugging on**, plug in, accept *Allow USB debugging*. In the admin page: **Devices → Adopt**. Recordings are pulled and transcribed from then on. `transcribe` is the default action; `summarize` needs a writer CLI logged in on the PC, `publish` needs the MD DOCS app — both optional, both set on the Config page.
+Then on the R1: **Developer options → USB debugging on**, plug in, accept *Allow USB debugging*. In the admin page: **Devices → Adopt**. Recordings are pulled and transcribed from then on. `transcribe` is the default action; `summarize` needs a writer CLI logged in on the PC, `publish` needs the MD DOCS app — both optional, both set on the Settings page. The **System** page shows whether each of those is ready.
 
-The first transcription downloads the Whisper model (`large-v3-turbo`, ~1.6 GB) — the job log says so. On a CPU-only PC choose a smaller `asr_model` (`small`, `medium`) in Config if it is too slow.
+The first transcription downloads the Whisper model (`large-v3-turbo`, ~1.6 GB) — the job log says so. On a CPU-only PC choose a smaller `asr_model` (`small`, `medium`) in Settings if it is too slow.
 
 ## Run
 
@@ -47,15 +47,15 @@ While the server runs on Windows it shows the R1CORD logomark in the notificatio
 |---|---|
 | *R1CORD Server* / device line / job line | Status only: `Rabbit R1 connected`, `No device connected`, `USB mode off`; `Idle`, `3 queued`, `Transcribing: <title>` |
 | **Open dashboard** (also a left-click on the icon) | `/admin` in the default browser |
-| **Devices**, **Config** | Those admin pages |
-| **USB mode** | On/off switch, same as the dashboard button; saved to `config.toml` |
+| **Devices**, **Settings** | Those admin pages |
+| **USB mode** | On/off switch, same as the button on the Devices page; saved to `config.toml` |
 | **Email finished jobs** | On/off switch for `email_enabled`; greyed out until `email_to` is set |
 | **Open recordings folder** / **Open logs folder** | `<datastore>\inbox` / `<datastore>\logs` in Explorer |
 | **Quit R1CORD Server** | Stops the server. In `run_mode = always` it starts again at the next logon; otherwise use `start-server.bat` |
 
 When a job finishes the icon shows a Windows notification: *Summary ready*, *Transcript ready* or *Job failed* with the recording title. Windows 11 puts new tray icons in the hidden-icons overflow (`^`); to keep it on the taskbar, drag it out of the overflow or turn it on under **Settings → Personalization → Taskbar → Other system tray icons** (listed as *Python* / *pythonw*, because the server runs under `pythonw.exe`). `--no-tray` or `R1CORD_NO_TRAY=1` starts the server without the icon.
 
-**Login:** none when you open the admin page on this PC. The HTTP Basic password (`admin` / `admin_password`, shown on the Config page) is only asked for when the page is reached through a tunnel or proxy (`CF-Connecting-IP` / `X-Forwarded-For` present).
+**Login:** none when you open the admin page on this PC. The HTTP Basic password (`admin` / `admin_password`, shown on the Settings page) is only asked for when the page is reached through a tunnel or proxy (`CF-Connecting-IP` / `X-Forwarded-For` present).
 
 Default listen address is `127.0.0.1:8765`. Do not bind `0.0.0.0` unless you set `listen_host` on purpose.
 
@@ -86,25 +86,29 @@ powershell -ExecutionPolicy Bypass -File install-task.ps1 -Mode always
 ## USB mode
 
 1. USB debugging on the R1 is on and this PC is authorized (it already is on the provisioned R1).
-2. Plug the device in. The dashboard's **USB mode** block and the **Devices** page list it as *connected, not adopted*. Nothing is pulled until you click **Adopt**.
+2. Plug the device in. The **Devices** page lists it as *Connected, not adopted*. Nothing is pulled until you click **Adopt**.
 3. From then on the tracker sees the device arrive; while it is connected the watcher lists `usb_device_root` every `usb_poll_s` (default 3 s) with one `find … -exec stat` call, pulls new or changed files into `inbox/<recordingId>/`, and — for a recording seen for the first time in `SAVED` state with no existing job — queues a job per `usb_auto_action`. Folders still being recorded (`metadata.json` status `RECORDING`/`PAUSED`, or no `metadata.json` yet) are skipped until Stop.
 4. A recording that already reached the server over Wi-Fi is recognized by name and size; nothing is transferred twice and no second job is created. Files that change later (a photo added on the device) are pulled and the row shows *changed since job*; **Re-process** is manual.
 5. The server never deletes anything on the device.
 
 Flags on the Devices page: *audio differs from inbox* (device audio hash ≠ inbox audio; the inbox copy is kept), *pull failed*, *could not queue*, *interrupted — archive only* (`audio.interrupted.m4a` is archived but not processed).
 
-Turn USB mode off (dashboard button or `usb_enabled`) before any mtkclient / fastboot work so the watcher is not talking to the transport.
+Turn USB mode off (Devices page button, tray menu, or `usb_enabled`) before any mtkclient / fastboot work so the watcher is not talking to the transport.
 
 ## Pairing
 
-1. In `/admin`, click **Generate pairing code**.
+1. In `/admin/devices`, under **Wi-Fi pairing**, click **Generate pairing code**.
 2. On the R1, enter the six-digit code (single-use, 10 minutes).
 3. The device stores a bearer token. Every `/v1` route except `POST /v1/pair` requires `Authorization: Bearer <token>`.
-4. Revoke a token from the dashboard if the device is lost.
+4. Revoke a device's key on the same panel if the device is lost.
 
-## Recordings on the dashboard
+## The dashboard
 
-**Recent jobs** shows each recording's audio size and three buttons: **Play** opens the audio in this PC's default media player, **Download** saves it through the browser, **Folder** opens Explorer with the file selected (`<datastore>\inbox\<recordingId>\`). Play and Folder act on this PC's desktop, so they appear, and work, only when the admin page is opened on this PC; through a tunnel or proxy only Download is offered (and the other two routes answer `403`).
+`/admin` answers "is it working, and where are my recordings": four tiles (**Device**, **Now**, **Queue**, **System**) and the **Recordings** list. Everything else has its own page: pairing and USB on **Devices**, dependency checks and version on **System**, config on **Settings**. The page reloads itself only while a job is running or queued or a pull is in progress.
+
+**Recordings** has one row per recording (its latest job; "N runs" when it was re-processed): title, **Length**, audio size, status, writer, updated time (local), and four buttons. **Play** opens the audio in this PC's default media player, **Download** saves it through the browser, **Folder** opens Explorer with the file selected (`<datastore>\inbox\<recordingId>\`). Play and Folder act on this PC's desktop, so they appear, and work, only when the admin page is opened on this PC; through a tunnel or proxy only Download is offered (and the other two routes answer `403`).
+
+**Delete** (after a confirm) removes the recording from this PC: inbox, outbox, work folder, its published pages under `webdav_folder`, and its job history. It is refused while the recording has a queued or running job. The R1's copy is never touched, and USB mode will not pull that recording again; sending it from the R1 or importing it brings it back.
 
 ## Email
 

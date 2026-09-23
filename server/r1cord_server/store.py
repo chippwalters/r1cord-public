@@ -133,6 +133,12 @@ CREATE TABLE IF NOT EXISTS device_files (
     pulled_at TEXT,
     PRIMARY KEY (serial, recording_id, name)
 );
+-- Recordings deleted on the admin page. The USB watcher never pulls these again; an explicit
+-- Send or Import (create_job) clears the mark.
+CREATE TABLE IF NOT EXISTS deleted_recordings (
+    recording_id TEXT PRIMARY KEY,
+    deleted_at TEXT
+);
 CREATE INDEX IF NOT EXISTS jobs_recording ON jobs (recording_id);
 CREATE INDEX IF NOT EXISTS jobs_status_created ON jobs (status, created_at);
 """
@@ -508,6 +514,7 @@ class JobStore:
                     "VALUES (?, ?, ?, ?, ?)",
                     (job_id, spec.name, spec.size, spec.sha256.lower(), received),
                 )
+            self._conn.execute("DELETE FROM deleted_recordings WHERE recording_id = ?", (job.recording_id,))
             self._conn.commit()
             rec = self.job(job_id)
             assert rec is not None
@@ -520,6 +527,79 @@ class JobStore:
                 "SELECT 1 FROM jobs WHERE status NOT IN ('complete', 'error') LIMIT 1"
             ).fetchone()
             return row is not None
+
+    def latest_jobs(self, limit: int = 100) -> list[tuple[JobRecord, int]]:
+        """The newest job of each recording, newest first, with that recording's job count."""
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM (
+                    SELECT j.*,
+                           ROW_NUMBER() OVER (PARTITION BY recording_id ORDER BY rowid DESC) AS rn,
+                           COUNT(*) OVER (PARTITION BY recording_id) AS runs,
+                           rowid AS rid
+                    FROM jobs j
+                ) WHERE rn = 1
+                ORDER BY updated_at DESC, rid DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [(self._job_from_row(r), int(r["runs"])) for r in rows]
+
+    def is_deleted(self, recording_id: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM deleted_recordings WHERE recording_id = ?", (recording_id,)
+            ).fetchone()
+            return row is not None
+
+    def delete_recording(self, recording_id: str) -> None:
+        """Remove a recording from this PC: its inbox, outbox and work folders, every published
+        page it produced (only inside `webdav_folder`), its jobs and its device-ledger rows.
+
+        Files go first: if one is locked (open in a media player), nothing in the index changes
+        and the delete can simply be retried. The R1's own copy is never touched; the recording
+        is marked deleted so USB mode does not pull it back.
+        """
+        _check_recording_id(recording_id)
+        with self._lock:
+            if self.active_job_for(recording_id) is not None:
+                raise StoreError("a job is still running for this recording; wait for it to finish")
+            folders = [
+                Path(r["publish_folder"])
+                for r in self._conn.execute(
+                    "SELECT DISTINCT publish_folder FROM jobs WHERE recording_id = ? AND publish_folder IS NOT NULL",
+                    (recording_id,),
+                )
+            ]
+            root = Path(self.config.datastore)
+            targets = [root / area / recording_id for area in ("inbox", "outbox", "work")]
+            webdav = Path(self.config.webdav_folder).resolve()
+            for folder in folders:
+                resolved = folder.resolve()
+                # Only a folder this server published into, never the publish root or anything outside it.
+                if webdav in resolved.parents:
+                    targets.append(resolved)
+            for target in targets:
+                if target.exists():
+                    try:
+                        shutil.rmtree(target)
+                    except OSError as exc:
+                        _log.warning("delete %s: could not remove %s: %s", recording_id, target, exc)
+                        raise StoreError(f"could not remove {target.name}: {exc.strerror or exc}") from exc
+            self._conn.execute(
+                "DELETE FROM job_files WHERE job_id IN (SELECT job_id FROM jobs WHERE recording_id = ?)",
+                (recording_id,),
+            )
+            for table in ("jobs", "device_files", "device_recordings"):
+                self._conn.execute(f"DELETE FROM {table} WHERE recording_id = ?", (recording_id,))
+            self._conn.execute(
+                "INSERT OR REPLACE INTO deleted_recordings (recording_id, deleted_at) VALUES (?, ?)",
+                (recording_id, utcnow_iso()),
+            )
+            self._conn.commit()
+        _log.info("delete %s: removed %d folder(s) and its job history", recording_id, len(targets))
 
     def active_job_for(self, recording_id: str) -> JobRecord | None:
         with self._lock:

@@ -4,18 +4,23 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {% if refresh %}<meta http-equiv="refresh" content="5">{% endif %}
-  <title>{% block title %}r1cord-server{% endblock %}</title>
+  <title>{% block title %}R1CORD Server{% endblock %}</title>
   <link rel="stylesheet" href="/static/admin.css">
   <link rel="icon" type="image/png" href="/static/favicon-64.png">
 </head>
 <body>
+  {% set path = request.url.path %}
   <header class="top">
-    <a class="brand" href="/admin">r1cord-server</a>
+    <a class="brand" href="/admin" aria-label="R1CORD Server — recordings">
+      <img class="brand-mark" src="/static/r1cord-logomark.svg" alt="">
+      <img class="brand-type" src="/static/r1cord-logotype.svg" alt="R1CORD">
+      <span class="brand-tag">Server</span>
+    </a>
     <nav>
-      <a href="/admin">Dashboard</a>
-      <a href="/admin/devices">Devices</a>
-      <a href="/admin/config">Config</a>
-      <a href="/admin/import">Import</a>
+      <a href="/admin" {% if path == "/admin" or path.startswith("/admin/jobs") or path == "/admin/import" %}class="active"{% endif %}>Recordings</a>
+      <a href="/admin/devices" {% if path.startswith("/admin/devices") or path == "/admin/pair" %}class="active"{% endif %}>Devices</a>
+      <a href="/admin/config" {% if path == "/admin/config" %}class="active"{% endif %}>Settings</a>
+      <a href="/admin/system" {% if path == "/admin/system" %}class="active"{% endif %}>System</a>
     </nav>
   </header>
   <main>

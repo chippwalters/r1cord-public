@@ -125,7 +125,7 @@ class Tray:
             sep,
             item("Open dashboard", self._open("/admin"), default=True),
             item("Devices", self._open("/admin/devices")),
-            item("Config", self._open("/admin/config")),
+            item("Settings", self._open("/admin/config")),
             sep,
             item("USB mode", self._toggle("usb_enabled"), checked=lambda _i: self._config().usb_enabled),
             item(

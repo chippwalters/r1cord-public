@@ -550,3 +550,12 @@ def test_dashboard_opens_when_an_adopted_device_is_plugged_in(setup) -> None:
     store.adopt_device(other)
     watcher.poll_once()          # adopted while already connected (Devices page): not a plug-in
     assert opened == [1]
+
+
+def test_a_recording_deleted_on_this_pc_is_not_pulled_back(setup) -> None:
+    tree, fake, store, watcher, _holder = setup
+    _device_recording(tree, "rec-gone")
+    store.delete_recording("rec-gone")
+    watcher.poll_once()
+    assert fake.pulled == []
+    assert store.latest_for("rec-gone") is None

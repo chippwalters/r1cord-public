@@ -431,7 +431,7 @@ def test_device_process_queues_a_recording_or_reports_the_error(env) -> None:
 def test_pairing_code_page_and_single_use(env) -> None:
     page = env.client.post("/admin/pair").text
     code = re.search(r'class="code">(\d{6})<', page).group(1)
-    assert "expires in 600 seconds" in page
+    assert "expires in 10 minutes" in page  # pair_code_ttl_s = 600
     assert "Server name: R1CORD" in page
 
     r = env.client.post("/v1/pair", json={"code": code})
@@ -439,14 +439,15 @@ def test_pairing_code_page_and_single_use(env) -> None:
     assert env.client.post("/v1/pair", json={"code": code}).json()["error"] == "invalid_code"
 
 
-def test_token_revoke_from_the_dashboard(env) -> None:
+def test_paired_device_is_revoked_from_the_devices_page(env) -> None:
     code = env.store.create_pair_code()
     token = env.client.post("/v1/pair", json={"code": code}).json()["token"]
     row = [t for t in env.store.tokens() if not t.revoked][0]
-    assert f'action="/admin/tokens/{row.id}/revoke"' in env.client.get("/admin").text
+    assert f'action="/admin/tokens/{row.id}/revoke"' in env.client.get("/admin/devices").text
+    assert "/revoke" not in env.client.get("/admin").text  # pairing lives on Devices, not the dashboard
 
     r = env.client.post(f"/admin/tokens/{row.id}/revoke", follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/admin"
+    assert r.status_code == 303 and r.headers["location"] == "/admin/devices#paired"
     assert [t for t in env.store.tokens() if t.id == row.id][0].revoked
     r = env.client.get("/v1/jobs/anything", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 401 and r.json()["error"] == "unauthorized"
@@ -600,3 +601,42 @@ def test_admin_email_end_to_end_through_a_local_gws_shim(env) -> None:
     r = env.client.post(f"/admin/jobs/{rec.job_id}/email", follow_redirects=False)
     assert r.status_code == 303 and r.headers["location"].endswith("?sent=me%40example.test")
     assert any("email: sent to me@example.test (mid-9)" in line for line in env.store.read_log(rec.job_id))
+
+
+# --- Recordings list, delete, system ------------------------------------------------------------
+
+
+def test_recordings_list_shows_each_recording_once_with_length_and_deletes_it(env) -> None:
+    c = env.client
+    first = _make_recording(env, "rec-row-1")
+    env.store.set_status(first.job_id, "complete")
+    rerun = env.store.process_inbox("rec-row-1", action="transcribe")
+    meta = env.store.inbox_dir("rec-row-1") / "metadata.json"
+    meta.write_text(json.dumps({**json.loads(meta.read_text(encoding="utf-8")), "durationMs": 92_400}), encoding="utf-8")
+
+    page = c.get("/admin").text
+    assert page.count('class="rec-title"') == 1
+    assert "2 runs" in page and "1:32" in page
+    assert 'action="/admin/recordings/rec-row-1/delete"' not in page  # the rerun is still queued
+
+    env.store.set_status(rerun.job_id, "complete")
+    assert 'action="/admin/recordings/rec-row-1/delete"' in c.get("/admin").text
+    r = c.post("/admin/recordings/rec-row-1/delete", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/admin?deleted=rec-row-1"
+    page = c.get(r.headers["location"]).text
+    assert "Deleted rec-row-1 from this PC" in page and 'class="rec-title"' not in page
+
+
+def test_delete_of_a_busy_recording_reports_why(env) -> None:
+    rec = _make_recording(env, "rec-busy-1")
+    env.store.set_status(rec.job_id, "writing")
+    r = env.client.post("/admin/recordings/rec-busy-1/delete", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/admin?notice=")
+    assert "still running" in env.client.get(r.headers["location"]).text
+    assert env.store.latest_for("rec-busy-1") is not None
+
+
+def test_system_page_flags_email_that_is_on_without_a_recipient(env) -> None:
+    env.app.state.config = replace(env.app.state.config, email_enabled=True, email_to="")
+    page = env.client.get("/admin/system").text
+    assert "On, but no recipient is set" in page and "Needs attention" in page

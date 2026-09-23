@@ -1,7 +1,8 @@
-"""Local admin UI: dashboard, job, config, import. HTTP Basic, no JavaScript."""
+"""Local admin UI: recordings, devices, settings, system, job pages. HTTP Basic through a proxy."""
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import shutil
@@ -18,7 +19,7 @@ from fastapi.templating import Jinja2Templates
 
 from .auth import is_local_direct, require_admin
 from .config import RUN_MODES, USB_ACTIONS, Config, save, with_updates
-from .store import AUDIO_NAMES, RetryNotAllowed, StoreError, utcnow_iso
+from .store import AUDIO_NAMES, RetryNotAllowed, StoreError
 from .usb import UsbWatcher
 
 router = APIRouter()
@@ -100,29 +101,132 @@ def _mddocs_status() -> tuple[str, str]:
         return ("unavailable", "unavailable")
 
 
-def _health(config: Config, store: Any) -> dict[str, str]:
-    root = Path(config.datastore)
-    try:
-        free = shutil.disk_usage(root).free
-        free_s = f"{free / (1024 ** 3):.1f} GB free"
-    except OSError as exc:
-        free_s = f"error ({exc})"
-    webdav = Path(config.webdav_folder)
-    recent = store.recent_jobs(1)
-    last = recent[0].updated_at if recent else "never"
+_WRITER_NAMES = {"claude_code": "Claude Code", "codex": "Codex", "grok_build": "Grok Build"}
+LOW_DISK_BYTES = 5 * 1024**3
+
+
+def _check(name: str, state: str, detail: str) -> dict[str, str]:
+    """One System row. state: ok (working), warn (needs attention), off (not in use)."""
+    return {"name": name, "state": state, "detail": detail}
+
+
+def _checks(config: Config) -> list[dict[str, str]]:
+    """What the server depends on, in the order a problem would hurt."""
+    from .mailer import gws_executable
+
+    checks: list[dict[str, str]] = []
+    gpu = _gpu_status()
+    if gpu.startswith("yes"):
+        checks.append(_check("Speech recognition", "ok", f"GPU (CUDA) · {config.asr_model}"))
+    elif gpu.startswith("no"):
+        checks.append(_check("Speech recognition", "ok", f"CPU · {config.asr_model} — slower than a GPU"))
+    else:
+        checks.append(_check("Speech recognition", "warn", f"Speech runtime not loaded: {gpu}"))
+
+    writer_cmds = {"claude_code": config.claude_cmd, "codex": config.codex_cmd, "grok_build": config.grok_cmd}
+    if config.default_writer == "none":
+        checks.append(_check("Summary writer", "off", "Summaries are off (default_writer = none)"))
+    else:
+        name = _WRITER_NAMES[config.default_writer]
+        found = _cli_status(writer_cmds[config.default_writer])
+        if found == "not found":
+            checks.append(_check("Summary writer", "warn", f"{name} not found ({writer_cmds[config.default_writer]})"))
+        else:
+            checks.append(_check("Summary writer", "ok", f"{name} · {found}"))
+    others = [
+        f"{_WRITER_NAMES[key]} {'found' if _cli_status(cmd) != 'not found' else 'not installed'}"
+        for key, cmd in writer_cmds.items()
+        if key != config.default_writer
+    ]
+    checks.append(_check("Other writers", "off", " · ".join(others)))
+
+    if not config.usb_enabled:
+        checks.append(_check("USB mode", "off", "Off — recordings arrive only by Send"))
+    else:
+        adb = UsbWatcher.adb_path(config)
+        checks.append(
+            _check("USB mode", "ok", f"adb · {adb}") if adb else _check("USB mode", "warn", f"adb not found ({config.adb_cmd})")
+        )
+
     md_health, md_port = _mddocs_status()
-    return {
-        "claude": _cli_status(config.claude_cmd),
-        "codex": _cli_status(config.codex_cmd),
-        "grok": _cli_status(config.grok_cmd),
-        "adb": UsbWatcher.adb_path(config) or "not found",
-        "gpu": _gpu_status(),
-        "mddocs": md_health,
-        "mddocs_port": md_port,
-        "datastore_space": free_s,
-        "webdav_exists": "yes" if webdav.is_dir() else "no",
-        "last_job": last,
-    }
+    if md_health == "reachable":
+        checks.append(_check("Publishing (MD DOCS)", "ok", f"Running · bridge port {md_port}"))
+    else:
+        checks.append(_check("Publishing (MD DOCS)", "off", "Not running — started automatically when a page is published"))
+    webdav = Path(config.webdav_folder)
+    checks.append(
+        _check("Publish folder", "ok", str(webdav))
+        if webdav.is_dir()
+        else _check("Publish folder", "warn", f"Missing: {webdav}")
+    )
+
+    if not config.email_enabled:
+        checks.append(_check("Email", "off", "Off"))
+    elif not config.email_to.strip():
+        checks.append(_check("Email", "warn", "On, but no recipient is set (email_to)"))
+    elif gws_executable(config.gws_cmd) is None:
+        checks.append(_check("Email", "warn", f"On, but gws was not found ({config.gws_cmd})"))
+    else:
+        checks.append(_check("Email", "ok", f"To {config.email_to.strip()} via gws"))
+
+    try:
+        free = shutil.disk_usage(Path(config.datastore)).free
+        checks.append(
+            _check("Storage", "ok" if free >= LOW_DISK_BYTES else "warn", f"{_human_size(free)} free · {config.datastore}")
+        )
+    except OSError as exc:
+        checks.append(_check("Storage", "warn", f"Cannot read {config.datastore}: {exc}"))
+    return checks
+
+
+_STATUS_VIEW = {
+    "complete": ("Done", "ok"),
+    "error": ("Failed", "bad"),
+    "queued": ("Queued", "idle"),
+    "uploading": ("Uploading", "work"),
+    "transcribing": ("Transcribing", "work"),
+    "transcribed": ("Transcribed", "work"),
+    "writing": ("Writing", "work"),
+    "written": ("Written", "work"),
+    "publishing": ("Publishing", "work"),
+    "published": ("Published", "work"),
+}
+
+
+def _status_view(status: str) -> tuple[str, str]:
+    return _STATUS_VIEW.get(status, (status.capitalize(), "work"))
+
+
+def _format_duration(ms: int) -> str:
+    seconds = round(ms / 1000)
+    hours, rest = divmod(seconds, 3600)
+    minutes, seconds = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes}:{seconds:02d}"
+
+
+def _duration(config: Config, recording_id: str) -> str:
+    """Length from the device's metadata.json, else from the transcript; "" when neither says."""
+    root = Path(config.datastore)
+    for path in (root / "inbox" / recording_id / "metadata.json", root / "outbox" / recording_id / "transcript.json"):
+        try:
+            ms = int(json.loads(path.read_text(encoding="utf-8")).get("durationMs") or 0)
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        if ms > 0:
+            return _format_duration(ms)
+    return ""
+
+
+def _local_time(iso: str) -> str:
+    """A stored UTC timestamp as this PC's local time, e.g. "Sep 23 · 11:48"."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone()
+    except ValueError:
+        return iso
+    return f"{dt:%b} {dt.day} · {dt:%H:%M}"
+
+
+TEMPLATES.env.filters["localtime"] = lambda iso: _local_time(iso) if iso else "never"
 
 
 def _elapsed(updated_at: str) -> str:
@@ -176,11 +280,11 @@ def _audio_file(config: Config, recording_id: str) -> Path | None:
 
 def _human_size(size: int) -> str:
     value = float(size)
-    for unit in ("B", "KB", "MB", "GB"):
-        if value < 1024 or unit == "GB":
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
             return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
         value /= 1024
-    return f"{size} B"
+    raise AssertionError("unreachable")
 
 
 def _local_only(request: Request) -> HTMLResponse | None:
@@ -194,28 +298,92 @@ def _local_only(request: Request) -> HTMLResponse | None:
 def dashboard(request: Request, _admin: Annotated[str, Depends(require_admin)]) -> HTMLResponse:
     store = request.app.state.store
     config = request.app.state.config
-    queue = [j for j in store.recent_jobs(50) if j.status == "queued"]
-    # oldest queued first
-    queue.sort(key=lambda j: j.created_at)
-    recent = store.recent_jobs(50)
-    audio: dict[str, str] = {}
-    for job in recent:
-        if job.recording_id not in audio:
-            path = _audio_file(config, job.recording_id)
-            audio[job.recording_id] = _human_size(path.stat().st_size) if path else ""
+    usb = request.app.state.usb.status()
+    rows = []
+    queued = 0
+    for job, runs in store.latest_jobs(100):
+        audio = _audio_file(config, job.recording_id)
+        label, tone = _status_view(job.status)
+        queued += job.status == "queued"
+        rows.append(
+            {
+                "job": job,
+                "runs": runs,
+                "duration": _duration(config, job.recording_id),
+                "size": _human_size(audio.stat().st_size) if audio else "",
+                "has_audio": audio is not None,
+                "status_label": label,
+                "status_tone": tone,
+                "updated": _local_time(job.updated_at),
+            }
+        )
+    running = _running(store)
+    adopted = [model or serial for serial, model, is_adopted in usb.connected if is_adopted]
+    issues = [c for c in _checks(config) if c["state"] == "warn"]
     return _templates(
         request,
         "dashboard.html",
-        health=_health(config, store),
-        running=_running(store),
-        queue=queue,
-        recent=recent,
-        audio=audio,
+        rows=rows,
+        running=running,
+        running_label=_status_view(running["job"].status)[0] if running else "",
+        queued=queued,
+        usb=usb,
+        device=adopted[0].replace("_", " ") if adopted else "",
+        issues=issues,
         local=is_local_direct(request),
-        tokens=store.tokens(),
-        usb=request.app.state.usb.status(),
-        now=utcnow_iso(),
+        notice=request.query_params.get("notice"),
+        deleted=request.query_params.get("deleted"),
+        # Keep the page current while something is moving; a still dashboard never reloads.
+        refresh=running is not None or queued > 0 or usb.syncing is not None,
     )
+
+
+@router.get("/admin/system", response_class=HTMLResponse)
+def system_page(request: Request, _admin: Annotated[str, Depends(require_admin)]) -> HTMLResponse:
+    store = request.app.state.store
+    config: Config = request.app.state.config
+    recent = store.recent_jobs(1)
+    server_version = _server_version()
+    return _templates(
+        request,
+        "system.html",
+        checks=_checks(config),
+        last_job=_local_time(recent[0].updated_at) if recent else "never",
+        server_version=server_version,
+        config_path=getattr(request.app.state, "config_path", ""),
+    )
+
+
+def _server_version() -> str:
+    """The version in the pyproject.toml shipped beside the package (the install is editable, so
+    installed metadata goes stale after an update); package metadata as a fallback."""
+    try:
+        import tomllib
+
+        pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        return str(tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["version"])
+    except (OSError, KeyError, ValueError):
+        pass
+    try:
+        from importlib.metadata import version
+
+        return version("r1cord-server")
+    except Exception:
+        return "unknown"
+
+
+@router.post("/admin/recordings/{recording_id}/delete")
+def recording_delete(
+    recording_id: str,
+    request: Request,
+    _admin: Annotated[str, Depends(require_admin)],
+) -> RedirectResponse:
+    try:
+        request.app.state.store.delete_recording(recording_id)
+    except (StoreError, ValueError) as exc:
+        log.warning("delete %s refused: %s", recording_id, exc)
+        return RedirectResponse(url=f"/admin?notice={quote(f'Could not delete {recording_id}: {exc}')}", status_code=303)
+    return RedirectResponse(url=f"/admin?deleted={quote(recording_id)}", status_code=303)
 
 
 @router.get("/admin/recordings/{recording_id}/audio", response_model=None)
@@ -268,7 +436,7 @@ def usb_toggle(request: Request, _admin: Annotated[str, Depends(require_admin)])
     old: Config = request.app.state.config
     apply_config(request.app, with_updates(old, usb_enabled=not old.usb_enabled))
     request.app.state.usb.poll_now()
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url="/admin/devices", status_code=303)
 
 
 @router.post("/admin/usb/poll")
@@ -301,6 +469,7 @@ def devices_page(
         for serial, (model, is_adopted) in connected.items()
         if not is_adopted
     ]
+    tokens = store.tokens()
     return _templates(
         request,
         "devices.html",
@@ -309,6 +478,8 @@ def devices_page(
         unknown=unknown,
         actions=USB_ACTIONS[1:],
         error=error,
+        paired=[t for t in tokens if not t.revoked],
+        revoked=[t for t in tokens if t.revoked],
         refresh=usb.syncing is not None,
     )
 
@@ -375,7 +546,7 @@ def revoke_token(
     _admin: Annotated[str, Depends(require_admin)],
 ) -> RedirectResponse:
     request.app.state.store.revoke_token(token_id)
-    return RedirectResponse(url="/admin", status_code=303)
+    return RedirectResponse(url="/admin/devices#paired", status_code=303)
 
 
 @router.get("/admin/jobs/{job_id}", response_class=HTMLResponse)
