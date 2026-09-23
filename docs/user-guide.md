@@ -21,7 +21,7 @@ You need two things from the download folder:
 | File | What it is |
 |---|---|
 | `R1CORD-<version>.apk` | The app, for the R1 |
-| `r1cord-server-<version>.zip` | The optional desktop companion, for a Windows PC |
+| `r1cord-server-<version>.zip` | The optional desktop companion, for a Windows PC (Mac and Linux coming soon) |
 
 ### Put the app on the R1
 
@@ -190,6 +190,8 @@ The companion is a small program for a Windows PC. It takes recordings off the R
 
 It is optional. The recorder is complete without it.
 
+**Windows only, for now.** The companion currently runs on Windows. Mac and Linux versions are coming soon; until then, Mac and Linux users can still copy recordings off the R1 by hand — see option 3 in [Getting recordings onto a computer](#getting-recordings-onto-a-computer).
+
 ### Installing it
 
 1. Unzip `r1cord-server-<version>.zip` anywhere on your PC — your Documents folder is fine.
@@ -222,12 +224,12 @@ with each recording in its own folder: the audio, any photos, and `transcript.tx
 
 1. **Length** — how long the recording is.
 2. **Size** — how big the recording's audio file is.
-3. **Play** — opens the audio in your PC's usual media player.
+3. **Play** — plays the recording right there in the page; press it again to pause. While it plays, Length counts up.
 4. **Download** — saves a copy through the browser.
-5. **Folder** — opens the folder that holds it, with the file selected.
+5. **Folder** — opens the folder that holds it in File Explorer, in front of the browser, with the file selected.
 6. **Delete** — removes the recording from this PC, after you confirm: the audio, transcript, summary, published page and job history. The copy on the R1 is untouched, and the companion will not copy it back when you plug in again. Delete is greyed out while the recording is being processed.
 
-Play and Folder act on the PC itself, so they only appear when the admin page is open on that PC.
+Folder acts on the PC itself, so it only appears when the admin page is open on that PC. Play and Download work from anywhere you can open the admin page.
 
 The **System** page lists everything the companion depends on — speech recognition, the summary writers, USB mode, publishing, email and free disk space — each marked *OK*, *Needs attention* or *Not in use*, with a one-line detail. When the System tile at the top of the dashboard says something needs attention, click it to go there.
 

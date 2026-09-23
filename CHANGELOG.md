@@ -3,6 +3,14 @@
 Versions are the app's `versionName`; the desktop companion carries its own version in
 `server/pyproject.toml` and is noted where it changed.
 
+## Companion 0.3.2 — Play in the page; Folder opens in front
+
+- **Play** now plays a recording right in the admin page (press again to pause; Length counts up),
+  instead of handing it to whatever app Windows has set for `.m4a`, which opened behind the
+  browser. It works through a tunnel too.
+- **Folder** brings its File Explorer window in front of the browser. Windows had been keeping it
+  behind.
+
 ## Companion 0.3.1 — redesigned admin pages; recording length and delete
 
 - **A calmer dashboard.** Four status tiles (device, current job, queue, system) above one

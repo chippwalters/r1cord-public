@@ -103,7 +103,6 @@ def test_proxy_headers_alone_force_a_challenge_on_every_admin_route(env) -> None
         ("post", "/admin/tokens/999/revoke", None),
         ("post", "/admin/config", {"server_name": "R1CORD"}),
         ("post", "/admin/import", {"folder": "Z:/nope"}),
-        ("post", "/admin/recordings/r/play", None),
         ("post", "/admin/recordings/r/folder", None),
         ("post", "/admin/devices/S1/adopt", None),
         ("post", "/admin/devices/S1/forget", None),
@@ -138,7 +137,6 @@ def test_admin_routes_answer_once_authenticated_through_the_tunnel(env) -> None:
         (("post", "/admin/tokens/999/revoke"), None, 303),
         (("post", "/admin/config"), None, 200),
         (("post", "/admin/import"), {"folder": "Z:/nope"}, 200),  # error re-render
-        (("post", "/admin/recordings/r/play"), None, 403),  # auth passes; the local-only guard fires
         (("post", "/admin/recordings/r/folder"), None, 403),
         (("post", "/admin/devices/S1/adopt"), None, 303),
         (("post", "/admin/devices/S1/forget"), None, 303),
@@ -153,7 +151,7 @@ def test_admin_routes_answer_once_authenticated_through_the_tunnel(env) -> None:
 # --- Dashboard ---------------------------------------------------------------------------------
 
 
-def test_dashboard_recent_jobs_show_size_and_keep_desktop_actions_local(env) -> None:
+def test_dashboard_recordings_play_in_the_page_and_keep_show_in_folder_local(env) -> None:
     with_audio = _make_recording(env, "rec-dash-1", audio=b"A" * 2049)  # 2.0 KB
     _make_recording(env, "rec-dash-2")
     # A recording whose audio vanished from the inbox shows an em dash and no audio actions.
@@ -163,15 +161,16 @@ def test_dashboard_recent_jobs_show_size_and_keep_desktop_actions_local(env) -> 
     local = c.get("/admin").text
     assert with_audio.job_id in local and "rec-dash-1" in local
     assert "2.0 KB" in local
-    assert 'action="/admin/recordings/rec-dash-1/play"' in local
+    assert 'data-play="/admin/recordings/rec-dash-1/audio"' in local
     assert 'action="/admin/recordings/rec-dash-1/folder"' in local
     assert 'href="/admin/recordings/rec-dash-1/audio"' in local
-    assert "rec-dash-2/audio" not in local and "rec-dash-2/play" not in local and "rec-dash-2/folder" not in local
+    assert "rec-dash-2/audio" not in local and "rec-dash-2/folder" not in local
 
-    # The same page through the tunnel: download yes, desktop actions no.
+    # The same page through the tunnel: play and download yes, the desktop action no.
     tunnel = c.get("/admin", headers=TUNNEL, auth=BASIC).text
+    assert 'data-play="/admin/recordings/rec-dash-1/audio"' in tunnel
     assert 'href="/admin/recordings/rec-dash-1/audio"' in tunnel
-    assert "/play" not in tunnel and "/folder" not in tunnel
+    assert "/folder" not in tunnel
 
 
 # --- Job page ----------------------------------------------------------------------------------
@@ -346,8 +345,7 @@ def test_recording_audio_wav_no_audio_and_dotted_ids(env) -> None:
     for path in ("/admin/recordings/rec-quiet/audio", "/admin/recordings/rec.dots/audio"):
         assert c.get(path).status_code == 404
 
-    # no audio: play/folder say so too instead of launching anything
-    assert c.post("/admin/recordings/rec-quiet/play").status_code == 404
+    # no audio: show-in-folder says so too instead of launching anything
     assert c.post("/admin/recordings/rec-quiet/folder").status_code == 404
 
 def test_handled_request_errors_are_logged_once_with_method_path_status_and_code(

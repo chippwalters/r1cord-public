@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Recordings — R1CORD Server{% endblock %}
+{# Reloading is done by the script below, so a recording that is playing is not cut off. #}
+{% block refresh %}{% endblock %}
 {% block body %}
 {% if notice %}<p class="banner banner-bad">{{ notice }}</p>{% endif %}
 {% if deleted %}<p class="banner banner-ok">Deleted {{ deleted }} from this PC. The R1 keeps its own copy.</p>{% endif %}
@@ -58,18 +60,14 @@
           <a class="rec-title" href="/admin/jobs/{{ j.job_id }}">{{ j.title or j.recording_id }}</a>
           <span class="rec-id">{{ j.recording_id }}{% if r.runs > 1 %} · {{ r.runs }} runs{% endif %}</span>
         </td>
-        <td class="num">{{ r.duration or "—" }}</td>
+        <td class="num len" data-len="{{ r.duration or '—' }}">{{ r.duration or "—" }}</td>
         <td class="num">{{ r.size or "—" }}</td>
         <td><span class="pill pill-{{ r.status_tone }}" {% if j.error %}title="{{ j.error.splitlines()[0] }}"{% endif %}>{{ r.status_label }}</span></td>
         <td class="mono-cell">{{ j.writer if j.summarize else "—" }}</td>
         <td class="mono-cell">{{ r.updated }}</td>
         <td class="actions">
           {% if r.has_audio %}
-          {% if local %}
-          <form method="post" action="/admin/recordings/{{ j.recording_id }}/play">
-            <button type="submit" class="icon-btn" title="Play in your media player" aria-label="Play"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.8v10.4L13 8z"/></svg></button>
-          </form>
-          {% endif %}
+          <button type="button" class="icon-btn play-btn" data-play="/admin/recordings/{{ j.recording_id }}/audio" title="Play" aria-label="Play"><svg class="i-play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.8v10.4L13 8z"/></svg><svg class="i-pause" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.8h3v10.4H4zM9 2.8h3v10.4H9z"/></svg></button>
           <a class="icon-btn" href="/admin/recordings/{{ j.recording_id }}/audio" title="Download the audio" aria-label="Download"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1.5h2v6.8l2.4-2.4 1.4 1.4L8 12.1 3.2 7.3l1.4-1.4L7 8.3zM2.5 13h11v1.8h-11z"/></svg></a>
           {% if local %}
           <form method="post" action="/admin/recordings/{{ j.recording_id }}/folder">
@@ -101,4 +99,41 @@
   <p class="empty">No recordings yet. Plug in an adopted R1, or press Send on one.</p>
   {% endif %}
 </section>
+{% endblock %}
+{% block scripts %}
+<script>
+(() => {
+  // One player for the page: Play starts a recording here in the browser, a second press pauses,
+  // and the Length cell counts up while it plays.
+  const audio = new Audio();
+  let button = null;
+  const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+  const lenCell = (btn) => btn.closest("tr").querySelector(".len");
+  const show = (btn, playing) => {
+    btn.classList.toggle("is-playing", playing);
+    btn.title = playing ? "Pause" : "Play";
+    btn.setAttribute("aria-label", btn.title);
+  };
+  const reset = (btn) => { show(btn, false); const c = lenCell(btn); c.textContent = c.dataset.len; };
+  document.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-play]");
+    if (!btn) return;
+    if (btn === button) { audio.paused ? audio.play() : audio.pause(); return; }
+    if (button) reset(button);
+    button = btn;
+    audio.src = btn.dataset.play;
+    audio.play().catch(() => { reset(btn); btn.title = "Could not play this recording"; });
+  });
+  audio.addEventListener("play", () => button && show(button, true));
+  audio.addEventListener("pause", () => button && show(button, false));
+  audio.addEventListener("ended", () => { if (button) reset(button); button = null; });
+  audio.addEventListener("timeupdate", () => {
+    if (button) lenCell(button).textContent = `${clock(audio.currentTime)} / ${lenCell(button).dataset.len}`;
+  });
+  {% if refresh %}
+  // Keep the page current while a job runs, but never reload over a recording that is playing.
+  setInterval(() => { if (audio.paused) location.reload(); }, 5000);
+  {% endif %}
+})();
+</script>
 {% endblock %}

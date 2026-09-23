@@ -173,6 +173,9 @@ td.actions form { display: inline; margin: 0; }
 .icon-btn:hover { border-color: var(--teal); color: var(--teal); background: var(--teal-tint); filter: none; text-decoration: none; }
 .icon-btn-danger:hover { border-color: var(--orange); color: var(--orange); background: var(--orange-tint); }
 .icon-btn-disabled, .icon-btn-disabled:hover { opacity: .35; cursor: not-allowed; border-color: var(--border); color: var(--body); background: transparent; }
+.play-btn .i-pause, .play-btn.is-playing .i-play { display: none; }
+.play-btn.is-playing .i-pause { display: block; }
+.play-btn.is-playing { border-color: var(--teal); color: var(--teal); background: var(--teal-tint); }
 
 details.confirm { display: inline-block; position: relative; vertical-align: middle; }
 details.confirm > summary { list-style: none; }

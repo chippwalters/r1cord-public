@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import shutil
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -19,6 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 from .auth import is_local_direct, require_admin
 from .config import RUN_MODES, USB_ACTIONS, Config, save, with_updates
+from .desktop import reveal_in_explorer
 from .store import AUDIO_NAMES, RetryNotAllowed, StoreError
 from .usb import UsbWatcher
 
@@ -288,7 +287,7 @@ def _human_size(size: int) -> str:
 
 
 def _local_only(request: Request) -> HTMLResponse | None:
-    """Play / Open folder act on this PC's desktop; never on behalf of a tunnel or proxy caller."""
+    """Show in folder acts on this PC's desktop; never on behalf of a tunnel or proxy caller."""
     if is_local_direct(request):
         return None
     return HTMLResponse("Only available on the server PC itself.", status_code=403)
@@ -398,22 +397,6 @@ def recording_audio(
     return FileResponse(path, filename=f"{recording_id}{path.suffix}")
 
 
-@router.post("/admin/recordings/{recording_id}/play", response_model=None)
-def recording_play(
-    recording_id: str,
-    request: Request,
-    _admin: Annotated[str, Depends(require_admin)],
-) -> RedirectResponse | HTMLResponse:
-    denied = _local_only(request)
-    if denied is not None:
-        return denied
-    path = _audio_file(request.app.state.config, recording_id)
-    if path is None:
-        return HTMLResponse("no audio for this recording", status_code=404)
-    os.startfile(path)  # type: ignore[attr-defined]  # Windows: the default media player
-    return RedirectResponse(url="/admin#recent", status_code=303)
-
-
 @router.post("/admin/recordings/{recording_id}/folder", response_model=None)
 def recording_folder(
     recording_id: str,
@@ -426,9 +409,8 @@ def recording_folder(
     path = _audio_file(request.app.state.config, recording_id)
     if path is None:
         return HTMLResponse("no audio for this recording", status_code=404)
-    # explorer.exe returns 1 even on success; Popen and forget.
-    subprocess.Popen(["explorer.exe", f"/select,{path}"])  # noqa: S603, S607
-    return RedirectResponse(url="/admin#recent", status_code=303)
+    reveal_in_explorer(path)
+    return RedirectResponse(url="/admin#recordings", status_code=303)
 
 
 @router.post("/admin/usb/toggle")

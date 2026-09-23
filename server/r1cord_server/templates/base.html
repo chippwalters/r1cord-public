@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  {% if refresh %}<meta http-equiv="refresh" content="5">{% endif %}
+  {% block refresh %}{% if refresh %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
   <title>{% block title %}R1CORD Server{% endblock %}</title>
   <link rel="stylesheet" href="/static/admin.css">
   <link rel="icon" type="image/png" href="/static/favicon-64.png">
@@ -26,5 +26,6 @@
   <main>
     {% block body %}{% endblock %}
   </main>
+  {% block scripts %}{% endblock %}
 </body>
 </html>
