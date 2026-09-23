@@ -12,15 +12,34 @@ own PC.
 > run it. Replacing rabbitOS is a separate one-time job with real risk —
 > [docs/Installing-Android-on-R1.md](docs/Installing-Android-on-R1.md) is the full procedure.
 
-## Documentation and downloads
+## Just want to use it?
+
+**Product page → https://chippwalters.com/r1cord.html** — what it is, what it does, and links to
+everything below.
+
+**Downloads → https://www.widgetgadget.com/cw1/R1CORD/**
+
+That folder has everything a user needs; nothing in this repository is required:
+
+| File | |
+|---|---|
+| `user-guide.html` | Start here — install, record, and the desktop companion |
+| `Installing-Android-on-R1.html` | The prerequisite: getting Android onto the R1 |
+| `R1CORD-<version>.apk` | The app, signed and ready to install |
+| `r1cord-server-<version>.zip` | The desktop companion |
+| `SHA256SUMS.txt` | Checksums, so you can verify what you downloaded |
+
+**This repository is for building it yourself** — reading the code, changing it, or compiling the
+app and the companion from source. An APK you build is signed with **your** key, which Android
+treats as a different app: you cannot update a downloaded install with it, or the reverse.
+
+## Documentation
+
+The same two manuals, in Markdown:
 
 - **[User guide](docs/user-guide.md)** — install, record, photos, getting recordings onto a
   computer, the desktop companion, troubleshooting.
 - **[Installing Android on a Rabbit R1](docs/Installing-Android-on-R1.md)** — the prerequisite.
-- Prebuilt, signed downloads (APK, companion zip, checksums) are linked from
-  [chippwalters.com](https://chippwalters.com). Building from source here gives you an APK signed
-  with **your** key, which Android treats as a different app — you cannot update a store-signed
-  install with it, and vice versa.
 
 ## What is here
 
