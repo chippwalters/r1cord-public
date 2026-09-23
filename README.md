@@ -1,5 +1,10 @@
 # R1CORD
 
+**This repository is the source code.** If you just want to install R1CORD, you do not need
+anything here — go to **https://www.widgetgadget.com/cw1/R1CORD/** and download it.
+
+---
+
 A voice recorder for the [Rabbit R1](https://www.rabbit.tech/), plus an optional desktop
 companion that pulls recordings off the device over USB and transcribes them locally.
 
@@ -12,14 +17,12 @@ own PC.
 > run it. Replacing rabbitOS is a separate one-time job with real risk —
 > [docs/Installing-Android-on-R1.md](docs/Installing-Android-on-R1.md) is the full procedure.
 
-## Just want to use it?
+## Downloads
 
-**Product page → https://chippwalters.com/r1cord.html** — what it is, what it does, and links to
-everything below.
+- Product page: **https://chippwalters.com/r1cord.html**
+- Files: **https://www.widgetgadget.com/cw1/R1CORD/**
 
-**Downloads → https://www.widgetgadget.com/cw1/R1CORD/**
-
-That folder has everything a user needs; nothing in this repository is required:
+That folder is everything a user needs:
 
 | File | |
 |---|---|
@@ -29,9 +32,8 @@ That folder has everything a user needs; nothing in this repository is required:
 | `r1cord-server-<version>.zip` | The desktop companion |
 | `SHA256SUMS.txt` | Checksums, so you can verify what you downloaded |
 
-**This repository is for building it yourself** — reading the code, changing it, or compiling the
-app and the companion from source. An APK you build is signed with **your** key, which Android
-treats as a different app: you cannot update a downloaded install with it, or the reverse.
+Building from source instead gives you an APK signed with **your** key, which Android treats as a
+different app: you cannot update a downloaded install with it, or the reverse.
 
 ## Documentation
 
