@@ -27,7 +27,7 @@ DEFAULT_PUBLIC_URL_BASE = ""
 
 _PATH_FIELDS = frozenset({"datastore", "webdav_folder"})
 _INT_FIELDS = frozenset({"listen_port", "writer_timeout_s", "pair_code_ttl_s", "usb_poll_s", "idle_exit_min"})
-_BOOL_FIELDS = frozenset({"usb_enabled"})
+_BOOL_FIELDS = frozenset({"usb_enabled", "email_enabled"})
 _WRITERS = frozenset({"claude_code", "codex", "grok_build", "none"})
 _ASR_DEVICES = frozenset({"auto", "cuda", "cpu"})
 _STYLES = frozenset({"notes", "minutes", "article"})
@@ -67,6 +67,10 @@ class Config:
     usb_device_root: str = "/sdcard/Download/R1CORD"
     run_mode: str = "plug"
     idle_exit_min: int = 10
+    # Email each finished job's summary through the Google Workspace CLI (`gws`, signed in on this PC).
+    email_enabled: bool = False
+    email_to: str = ""
+    gws_cmd: str = "gws"
 
 
 def default_config_path() -> Path:
@@ -130,12 +134,15 @@ def _parse(cfg_path: Path) -> Config:
         if f.name not in raw:
             continue
         value = raw[f.name]
-        if f.name in _PATH_FIELDS:
-            value = Path(value)
-        elif f.name in _INT_FIELDS:
-            value = int(value)
-        elif f.name in _BOOL_FIELDS:
-            value = bool(value)
+        try:
+            if f.name in _PATH_FIELDS:
+                value = Path(value)
+            elif f.name in _INT_FIELDS:
+                value = int(value)
+            elif f.name in _BOOL_FIELDS:
+                value = bool(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid {f.name}: {raw[f.name]!r} ({exc})") from exc
         kwargs[f.name] = value
     config = Config(**kwargs)
     if not config.admin_password:

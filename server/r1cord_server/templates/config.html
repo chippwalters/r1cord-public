@@ -55,6 +55,11 @@
     </select>
   </label>
   <label>usb_device_root <input type="text" name="usb_device_root" value="{{ config.usb_device_root }}"></label>
+  <h2>Email (optional — needs the gws CLI signed in on this PC)</h2>
+  <label><input type="checkbox" name="email_enabled" {% if config.email_enabled %}checked{% endif %}> email_enabled — email each finished job's summary</label>
+  <label>email_to <input type="text" name="email_to" value="{{ config.email_to }}" placeholder="you@example.com"></label>
+  <label>gws_cmd <input type="text" name="gws_cmd" value="{{ config.gws_cmd }}"></label>
+  <p class="muted">gws: <span class="path">{{ gws_path or "not found" }}</span>. Sent from the Gmail account gws is signed in with (<span class="path">gws auth login</span>).</p>
   <h2>Lifecycle</h2>
   <label>run_mode
     <select name="run_mode">

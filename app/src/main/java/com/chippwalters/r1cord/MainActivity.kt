@@ -92,6 +92,21 @@ class MainActivity : ComponentActivity() {
         val needed = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA, Manifest.permission.POST_NOTIFICATIONS)
             .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (needed.isNotEmpty()) permissions.launch(needed.toTypedArray())
+        if (savedInstanceState == null) openSummaryFrom(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openSummaryFrom(intent)
+    }
+
+    /** The "Sent" notification lands here with the published summary URL to show in the in-app viewer. */
+    private fun openSummaryFrom(intent: Intent?) {
+        val url = intent?.getStringExtra(EXTRA_SUMMARY_URL)?.takeIf { it.isNotBlank() } ?: return
+        intent.removeExtra(EXTRA_SUMMARY_URL)
+        settingsOpen = false
+        model.openSummary(url)
     }
 
     override fun onResume() {
@@ -306,5 +321,9 @@ class MainActivity : ComponentActivity() {
                 dismissButton = { TextButton(onClick = { confirmPowerOff = false }) { Text("Cancel") } },
             )
         }
+    }
+
+    companion object {
+        const val EXTRA_SUMMARY_URL = "com.chippwalters.r1cord.extra.SUMMARY_URL"
     }
 }

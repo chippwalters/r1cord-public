@@ -85,8 +85,7 @@ class RecordingLibrary(context: Context) {
     init { resolver.registerContentObserver(collection, true, observer) }
 
     /** Recordable seconds left, at the byte rate of the format the next session will use. */
-    fun remainingSeconds(bytesPerSecond: Long): Long =
-        ((availableBytes() - RESERVE_BYTES).coerceAtLeast(0) / bytesPerSecond.coerceAtLeast(1))
+    fun remainingSeconds(bytesPerSecond: Long): Long = recordableSeconds(availableBytes(), bytesPerSecond)
 
     internal fun hasRecordingSpace(): Boolean = availableBytes() > RESERVE_BYTES + STOP_MARGIN_BYTES
 
@@ -94,8 +93,9 @@ class RecordingLibrary(context: Context) {
         ready.await()
         lock.withLock {
             check(hasRecordingSpace()) { "Storage is full. Keep at least 64 MiB free before recording." }
-            val id = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + "-" + UUID.randomUUID().toString().take(8)
-            val row = RecordingRow(id, SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date()), System.currentTimeMillis())
+            val now = System.currentTimeMillis()
+            val id = newRecordingId(now)
+            val row = RecordingRow(id, recordingTitle(now), now)
             dao.insert(row)
             active.add(id)
             try {
@@ -335,26 +335,7 @@ class RecordingLibrary(context: Context) {
 
     private suspend fun writeMetadata(id: String, status: String? = null, error: String? = null) {
         val row = dao.recording(id) ?: return
-        val photos = JSONArray()
-        dao.photos(id).forEach { photo ->
-            photos.put(JSONObject().put("id", photo.id).put("createdAt", photo.createdAt).put("status", photo.status)
-                .put("file", if (photo.status == "SAVED") "photo-${photo.id}.jpg" else "photo-${photo.id}.interrupted.jpg"))
-        }
-        val state = status ?: row.status
-        val extension = audioExtension(row.audioUri)
-        val wav = extension == WAV_EXTENSION
-        val payload = JSONObject().put("schemaVersion", 1).put("id", id).put("title", row.title)
-            .put("createdAt", row.createdAt).put("durationMs", row.durationMs).put("status", state)
-            .put("audio", when {
-                state == "SAVED" -> "audio.$extension"
-                state in setOf("RECORDING", "PAUSED", "STARTING") -> "audio.partial.$extension"
-                else -> "audio.interrupted.$extension"
-            })
-            .put("format", if (wav) "wav-pcm16" else "aac-lc")
-            .put("sampleRate", 48000).put("channels", 1)
-            .put("bitrate", if (wav) WAV_BIT_RATE else AAC_BIT_RATE)
-            .put("waveform", JSONArray(row.waveform)).put("photos", photos)
-            .put("error", error ?: row.error ?: JSONObject.NULL)
+        val payload = buildMetadataPayload(row, dao.photos(id), audioExtension(row.audioUri), status, error)
         val bytes = payload.toString(2).toByteArray(Charsets.UTF_8)
         // Reuse the journaled URI so Android never silently creates metadata (1).json.
         val uri = if (row.metadataUri.isNotEmpty() && exists(row.metadataUri)) Uri.parse(row.metadataUri) else {
@@ -404,7 +385,7 @@ class RecordingLibrary(context: Context) {
             resolver.query(Uri.parse(uri), arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)
                 ?.use { if (it.moveToFirst()) it.getString(0) else null }
         }.getOrNull()
-        return if (name != null && name.endsWith(".$WAV_EXTENSION", ignoreCase = true)) WAV_EXTENSION else AAC_EXTENSION
+        return audioExtensionFor(name)
     }
 
     /** Published name for a recording's audio, preserving the container it was recorded in. */
@@ -459,10 +440,75 @@ class RecordingLibrary(context: Context) {
         internal const val WAV_EXTENSION = "wav"
         private const val AAC_MIME = "audio/mp4"
         private const val WAV_MIME = "audio/x-wav"
-        private const val AAC_BIT_RATE = 96_000
-        private const val WAV_BIT_RATE = 768_000
+        internal const val AAC_BIT_RATE = 96_000
+        internal const val WAV_BIT_RATE = 768_000
     }
 }
+
+// --- Pure helpers, extracted so their contracts can be tested without a device ---------
+
+/**
+ * Recording id: UTC-independent local timestamp plus 8 random hex chars, e.g.
+ * "20260923-141530-1a2b3c4d". The timestamp prefix sorts naturally in the library
+ * and the suffix keeps ids unique when several are created in the same second.
+ */
+internal fun newRecordingId(at: Long): String =
+    SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date(at)) + "-" + UUID.randomUUID().toString().take(8)
+
+/** Library title shown to the user: short local date and time, e.g. "Sep 23, 14:15". */
+internal fun recordingTitle(at: Long): String =
+    SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(at))
+
+/**
+ * The container implied by a recording's MediaStore display name: WAV only when the
+ * name ends in ".wav" (case-insensitive); everything else, including a missing name,
+ * is the historical AAC/M4A default.
+ */
+internal fun audioExtensionFor(displayName: String?): String =
+    if (displayName != null && displayName.endsWith(".${RecordingLibrary.WAV_EXTENSION}", ignoreCase = true))
+        RecordingLibrary.WAV_EXTENSION else RecordingLibrary.AAC_EXTENSION
+
+/** Audio file name recorded in metadata.json for a recording in [state]. */
+internal fun audioFileFor(state: String, extension: String): String = when {
+    state == "SAVED" -> "audio.$extension"
+    state in setOf("RECORDING", "PAUSED", "STARTING") -> "audio.partial.$extension"
+    else -> "audio.interrupted.$extension"
+}
+
+/**
+ * The metadata.json payload for a recording. [status] and [error] override the row when
+ * finishing/recovery wants to describe an outcome that is not yet the stored status.
+ */
+internal fun buildMetadataPayload(
+    row: RecordingRow,
+    photos: List<PhotoRow>,
+    extension: String,
+    status: String? = null,
+    error: String? = null,
+): JSONObject {
+    val photoList = JSONArray()
+    photos.forEach { photo ->
+        photoList.put(JSONObject().put("id", photo.id).put("createdAt", photo.createdAt).put("status", photo.status)
+            .put("file", if (photo.status == "SAVED") "photo-${photo.id}.jpg" else "photo-${photo.id}.interrupted.jpg"))
+    }
+    val state = status ?: row.status
+    val wav = extension == RecordingLibrary.WAV_EXTENSION
+    return JSONObject().put("schemaVersion", 1).put("id", row.id).put("title", row.title)
+        .put("createdAt", row.createdAt).put("durationMs", row.durationMs).put("status", state)
+        .put("audio", audioFileFor(state, extension))
+        .put("format", if (wav) "wav-pcm16" else "aac-lc")
+        .put("sampleRate", 48000).put("channels", 1)
+        .put("bitrate", if (wav) RecordingLibrary.WAV_BIT_RATE else RecordingLibrary.AAC_BIT_RATE)
+        .put("waveform", JSONArray(row.waveform)).put("photos", photoList)
+        .put("error", error ?: row.error ?: JSONObject.NULL)
+}
+
+/**
+ * Recordable seconds for [availableBytes] of free storage at [bytesPerSecond]: the
+ * 64 MiB reserve is always subtracted and never yields a negative estimate.
+ */
+internal fun recordableSeconds(availableBytes: Long, bytesPerSecond: Long): Long =
+    ((availableBytes - RecordingLibrary.RESERVE_BYTES).coerceAtLeast(0) / bytesPerSecond.coerceAtLeast(1))
 
 data class OffloadBundle(
     val id: String,

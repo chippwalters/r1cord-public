@@ -25,6 +25,7 @@ class FakeAdb:
         self.pulled: list[str] = []
         self.reversed: list[str] = []
         self.truncate: set[str] = set()
+        self.fail_pulls: set[str] = set()
 
     def run(self, args: list[str], *, timeout: int) -> str:
         if args[1:] == ["devices", "-l"]:
@@ -54,6 +55,8 @@ class FakeAdb:
         if args[3] == "pull":
             remote, local = args[5], args[6]
             rel = remote[len(ROOT) + 1 :]
+            if rel in self.fail_pulls:
+                raise AdbError(f"device '{serial}' detached")
             src = self.tree / serial / rel
             if not src.is_file():
                 raise AdbError(f"remote object '{remote}' does not exist")
@@ -326,6 +329,171 @@ def test_parse_track_frames_handles_windows_crlf_and_partial_frames() -> None:
         parse_track_frames(b"zzzz")
 
 
+def test_parse_track_frames_reassembles_frames_from_incremental_chunks() -> None:
+    # The tracker thread reads 4096-byte chunks; frames (and \r\n pairs) can split anywhere.
+    payload = "R1DEVICESERIAL001   device product:gsi_r1 model:Rabbit_R1 transport_id:3\n"
+    frame = f"{len(payload):04x}{payload}".encode().replace(b"\n", b"\r\n")
+    stream = frame + frame
+    frames: list[str] = []
+    rest = b""
+    for i in range(len(stream)):
+        rest += stream[i : i + 1]
+        got, rest = parse_track_frames(rest)
+        frames.extend(got)
+    assert frames == [payload, payload]
+    assert rest == b""
+
+
+def test_parse_devices_ignores_daemon_banners_and_tolerates_crlf_and_tabs() -> None:
+    text = (
+        "* daemon not running; starting now at tcp:5037\r\n"
+        "* daemon started successfully\r\n"
+        "List of devices attached\r\n"
+        "SER1\t\tdevice product:gsi_r1 model:Rabbit_R1 transport_id:1\r\n"
+        "SER2         offline transport_id:2\r\n"
+        "SER3         unauthorized usb:1-1\r\n"
+        "garbage-without-state\r\n"
+        "\r\n"
+    )
+    devices = parse_devices(text)
+    assert [(d.serial, d.state, d.model) for d in devices] == [
+        ("SER1", "device", "Rabbit_R1"),
+        ("SER2", "offline", ""),
+        ("SER3", "unauthorized", ""),
+    ]
+
+
+def test_parse_listing_tolerates_crlf_and_rejects_names_with_spaces() -> None:
+    text = (
+        "10 20 ./rec-crlf/metadata.json\r\n"
+        "30 40 ./rec-crlf/audio.m4a\r\n"
+        "50 60 ./rec-crlf/my photo.jpg\r\n"
+        "error: device offline\r\n"
+        "not-a-number junk ./rec-crlf/x.bin\r\n"
+    )
+    listing = parse_listing(text)
+    assert listing == {"rec-crlf": {"metadata.json": (10, 20), "audio.m4a": (30, 40)}}
+
+
+def test_paused_recording_is_skipped(setup) -> None:
+    tree, fake, store, watcher, holder = setup
+    _device_recording(tree, "rec-paused", status="PAUSED")
+
+    watcher.poll_once()
+
+    assert fake.pulled == ["rec-paused/metadata.json"]
+    assert not (store.inbox_dir("rec-paused") / "audio.partial.m4a").exists()
+    assert store.latest_for("rec-paused") is None
+    assert store.device_recordings(SERIAL)[0].device_status == "PAUSED"
+
+
+def test_interrupted_recording_is_archive_only(setup) -> None:
+    tree, fake, store, watcher, holder = setup
+    holder["cfg"] = replace(holder["cfg"], usb_auto_action="summarize")
+    _device_recording(tree, "rec-int", status="INTERRUPTED")
+
+    watcher.poll_once()
+
+    # Files are pulled for the archive, but no job is ever queued automatically.
+    assert (store.inbox_dir("rec-int") / "audio.partial.m4a").read_bytes() == b"m4a-bytes"
+    assert store.latest_for("rec-int") is None
+    row = store.device_recordings(SERIAL)[0]
+    assert row.device_status == "INTERRUPTED" and row.auto_job_id is None
+
+
+def test_unreadable_metadata_flags_pull_failed_and_recovers(setup) -> None:
+    tree, fake, store, watcher, holder = setup
+    folder = tree / SERIAL / "rec-bad"
+    folder.mkdir(parents=True)
+    (folder / "metadata.json").write_text("{ this is not json", encoding="utf-8")
+    (folder / "audio.m4a").write_bytes(b"m4a-bytes")
+
+    watcher.poll_once()
+
+    row = store.device_recordings(SERIAL)[0]
+    assert row.flag == "pull_failed"
+    assert row.device_status == "UNKNOWN"
+    assert not (store.inbox_dir("rec-bad") / "audio.m4a").is_file()  # sync stopped at metadata
+    assert store.latest_for("rec-bad") is None
+
+    # The device rewrites valid metadata; the next pass clears the flag and queues normally.
+    holder["cfg"] = replace(holder["cfg"], usb_auto_action="summarize")
+    (folder / "metadata.json").write_text(
+        json.dumps({"id": "rec-bad", "title": "Recovered", "createdAt": 1_758_400_000_000, "status": "SAVED"}),
+        encoding="utf-8",
+    )
+    watcher.poll_once()
+
+    row = store.device_recordings(SERIAL)[0]
+    assert row.flag is None
+    assert (store.inbox_dir("rec-bad") / "audio.m4a").is_file()
+    job = store.latest_for("rec-bad")
+    assert job is not None and job.status == "queued" and job.title == "Recovered"
+
+
+def test_pull_error_aborts_sync_without_half_files_and_retries_next_pass(setup) -> None:
+    tree, fake, store, watcher, holder = setup
+    holder["cfg"] = replace(holder["cfg"], usb_auto_action="summarize")
+    _device_recording(tree, "rec-detach")
+    fake.fail_pulls.add("rec-detach/audio.m4a")
+
+    watcher.poll_once()
+
+    inbox = store.inbox_dir("rec-detach")
+    assert (inbox / "metadata.json").is_file()          # metadata arrived before the abort
+    assert not (inbox / "audio.m4a").exists()
+    assert not (inbox / ".upload" / "audio.m4a.partial").exists()
+    assert store.latest_for("rec-detach") is None       # nothing half-processed was queued
+    device = next(d for d in store.devices() if d.serial == SERIAL)
+    assert device.last_error and "detached" in device.last_error
+    assert watcher.status().last_error
+
+    # The cable is back: the next pass pulls the audio, queues the job, clears the error.
+    fake.fail_pulls.clear()
+    watcher.poll_once()
+
+    assert (inbox / "audio.m4a").read_bytes() == b"m4a-bytes"
+    assert store.latest_for("rec-detach").status == "queued"
+    assert watcher.status().last_error is None
+
+
+def test_reverse_is_reapplied_after_reconnect(setup) -> None:
+    tree, fake, store, watcher, holder = setup
+    _device_recording(tree, "rec-rv")
+    watcher.poll_once()
+    assert fake.reversed == [f"{SERIAL} tcp:8765 tcp:8765"]
+
+    fake.devices = []                       # unplugged
+    watcher.poll_once()
+    fake.devices = [(SERIAL, "device")]     # re-plugged
+    watcher.poll_once()
+
+    assert fake.reversed == [f"{SERIAL} tcp:8765 tcp:8765"] * 2
+
+
+def test_missing_adb_sets_error_and_clears_connections(
+    setup, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree, fake, store, watcher, holder = setup
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)  # do not discover a real SDK adb on this machine
+    holder["cfg"] = replace(holder["cfg"], adb_cmd=str(tmp_path / "nope" / "adb.exe"))
+
+    watcher.poll_once()
+
+    status = watcher.status()
+    assert status.last_error is not None and status.last_error.startswith("adb not found:")
+    assert status.connected == []
+    assert status.adb == "not found"
+
+
+def test_status_reports_usb_disabled(setup) -> None:
+    tree, fake, store, watcher, holder = setup
+    holder["cfg"] = replace(holder["cfg"], usb_enabled=False)
+    assert watcher.status().enabled is False
+    holder["cfg"] = replace(holder["cfg"], usb_enabled=True)
+    assert watcher.status().enabled is True
+
+
 def test_idle_exit_only_in_plug_mode_when_nothing_needs_the_server(setup) -> None:
     tree, fake, store, watcher, holder = setup
     exits: list[int] = []
@@ -357,3 +525,28 @@ def test_idle_exit_only_in_plug_mode_when_nothing_needs_the_server(setup) -> Non
     assert watcher._idle_check(plug, now=start + 20_000) is False
     store.set_status(rec.job_id, "complete")
     assert watcher._idle_check(plug, now=start + 20_000) is True
+
+
+def test_dashboard_opens_when_an_adopted_device_is_plugged_in(setup) -> None:
+    tree, fake, store, watcher, holder = setup
+    opened: list[int] = []
+    watcher._open_dashboard = lambda: opened.append(1)
+    holder["cfg"] = replace(holder["cfg"], usb_auto_action="archive")
+
+    watcher.poll_once()          # already plugged in at server start: baseline, no tab
+    watcher.poll_once()          # still plugged in
+    assert opened == []
+
+    fake.devices = []
+    watcher.poll_once()
+    fake.devices = [(SERIAL, "device")]
+    watcher.poll_once()          # re-plugged
+    assert opened == [1]
+
+    other = "OTHERPHONE0001"
+    fake.devices = [(SERIAL, "device"), (other, "device")]
+    watcher.poll_once()          # a device that is not adopted
+    assert opened == [1]
+    store.adopt_device(other)
+    watcher.poll_once()          # adopted while already connected (Devices page): not a plug-in
+    assert opened == [1]

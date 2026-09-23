@@ -1,6 +1,6 @@
 [project]
 name = "r1cord-server"
-version = "0.2.0"
+version = "0.3.0"
 description = "Desktop offload server for the R1CORD recorder: upload, faster-whisper transcription, agent-written summaries, MD DOCS publish."
 requires-python = ">=3.12"
 dependencies = [
@@ -11,6 +11,9 @@ dependencies = [
   "tomli-w>=1.0",
   "python-multipart>=0.0.9",
   "faster-whisper>=1.1",
+  "markdown>=3.5",
+  "pystray>=0.19; sys_platform == 'win32'",
+  "Pillow>=10",
 ]
 
 [project.optional-dependencies]

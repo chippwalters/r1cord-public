@@ -65,10 +65,16 @@ def webdav_url(config: Config, folder: Path) -> str:
     """`<public_url_base>/<YYYY>/<MM>/<folder>/summary.html` with encoded segments.
 
     Lexical only: `Path.resolve()` raises WinError 1005 on the rclone WebDAV mount.
+    Root matching is case-insensitive and boundary-aware (a sibling like `wd2`
+    next to root `wd` is not under the root).
     """
     folder = Path(folder)
-    root = Path(config.webdav_folder)
-    rel = folder.relative_to(root) if _norm(folder).startswith(_norm(root)) else Path(*folder.parts[-3:])
+    root_parts = [_norm(p) for p in Path(config.webdav_folder).parts]
+    folder_parts = [_norm(p) for p in folder.parts]
+    if len(folder_parts) > len(root_parts) and folder_parts[: len(root_parts)] == root_parts:
+        rel = Path(*folder.parts[len(root_parts):])
+    else:
+        rel = Path(*folder.parts[-3:])
     parts = [quote(p, safe="-_.") for p in rel.parts]
     base = config.public_url_base.rstrip("/")
     return f"{base}/{'/'.join(parts)}/summary.html"

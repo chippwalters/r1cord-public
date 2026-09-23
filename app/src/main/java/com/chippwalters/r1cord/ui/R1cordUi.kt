@@ -37,11 +37,11 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -128,6 +128,7 @@ fun R1cordUi(model: R1cordViewModel, onSettings: () -> Unit) {
                 Screen.LIBRARY -> LibraryScreen(state, model)
                 Screen.DETAIL -> DetailScreen(state, model)
                 Screen.CAMERA -> CameraHost(state, model)
+                Screen.VIEWER -> state.viewerUrl?.let { url -> SummaryViewer(url, model) }
             }
             state.message?.let { message ->
                 AlertDialog(
@@ -392,8 +393,8 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
                 JobBadge(item.jobStatus)
             }
             if (!item.webdavUrl.isNullOrBlank()) {
-                ActionButton("OPEN SUMMARY", "Open published summary", Icons.Default.OpenInNew,
-                    { model.openUrl(item.webdavUrl) }, Modifier.fillMaxWidth())
+                ActionButton("OPEN SUMMARY", "Open published summary", Icons.Default.Description,
+                    { model.openSummary(item.webdavUrl) }, Modifier.fillMaxWidth())
             }
             if (deviceBadge(item.jobStatus) != "local") {
                 TextButton(
@@ -718,7 +719,7 @@ private fun SendResultDialog(result: SendResultUi, model: R1cordViewModel) {
         confirmButton = {
             if (!result.webdavUrl.isNullOrBlank()) {
                 TextButton(
-                    onClick = { model.openUrl(result.webdavUrl) },
+                    onClick = { model.openSummary(result.webdavUrl) },
                     modifier = control("Open summary"),
                 ) { Text("OPEN") }
             }
@@ -743,7 +744,7 @@ private fun SavedStatus(status: String) {
 }
 
 @Composable
-private fun ActionButton(
+internal fun ActionButton(
     label: String,
     description: String,
     icon: ImageVector,
@@ -860,7 +861,7 @@ private fun loadPhoto(resolver: ContentResolver, value: String, target: Int): Bi
     }
 }
 
-private fun control(description: String): Modifier = Modifier.heightIn(min = 48.dp)
+internal fun control(description: String): Modifier = Modifier.heightIn(min = 48.dp)
     .semantics { contentDescription = description }
 
 private fun com.chippwalters.r1cord.model.CaptureState.isBusy(): Boolean =
@@ -875,20 +876,20 @@ private fun captureLabel(status: CaptureStatus): String = when (status) {
     CaptureStatus.STOPPING -> "SAVING…"
 }
 
-private fun timerLabel(ms: Long): String {
+internal fun timerLabel(ms: Long): String {
     val seconds = ms.coerceAtLeast(0) / 1_000
     return String.format(Locale.ROOT, "%02d:%02d:%02d", seconds / 3_600, seconds / 60 % 60, seconds % 60)
 }
 
-private fun storageLabel(seconds: Long): String {
+internal fun storageLabel(seconds: Long): String {
     val safe = seconds.coerceAtLeast(0)
     return if (safe < 60) "${safe}s" else "${safe / 3_600}h ${safe / 60 % 60}m"
 }
 
-private fun dateLabel(timestamp: Long): String =
+internal fun dateLabel(timestamp: Long): String =
     SimpleDateFormat("MMM d · h:mm a", Locale.getDefault()).format(Date(timestamp))
 
-private fun formatBytes(bytes: Long): String {
+internal fun formatBytes(bytes: Long): String {
     val value = bytes.coerceAtLeast(0)
     return when {
         value < 1024 -> "$value B"

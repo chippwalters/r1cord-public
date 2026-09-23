@@ -19,6 +19,8 @@ CREATED_AT = 1_758_400_000_000
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("r1cord_server.worker.Worker.start", lambda self: None)
     monkeypatch.setattr("r1cord_server.worker.Worker.stop", lambda self: None)
+    monkeypatch.setattr("r1cord_server.usb.UsbWatcher.start", lambda self: None)
+    monkeypatch.setattr("r1cord_server.usb.UsbWatcher.stop", lambda self: None)
     cfg = Config(
         datastore=tmp_path / "ds",
         webdav_folder=tmp_path / "wd",
@@ -208,3 +210,39 @@ def test_admin_open_on_loopback_but_basic_through_a_proxy(tmp_path: Path, monkey
         # Same loopback socket, but the request came through cloudflared: password required.
         assert local.get("/admin", headers={"CF-Connecting-IP": "203.0.113.9"}).status_code == 401
         assert local.get("/admin", headers={"X-Forwarded-For": "203.0.113.9"}, auth=("admin", "test-admin-pass1")).status_code == 200
+
+
+def test_recording_audio_download_and_desktop_actions_stay_on_this_pc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("r1cord_server.worker.Worker.start", lambda self: None)
+    monkeypatch.setattr("r1cord_server.worker.Worker.stop", lambda self: None)
+    monkeypatch.setattr("r1cord_server.usb.UsbWatcher.start", lambda self: None)
+    launched: list[object] = []
+    monkeypatch.setattr("r1cord_server.admin.os.startfile", launched.append, raising=False)
+    monkeypatch.setattr("r1cord_server.admin.subprocess.Popen", launched.append)
+    cfg = Config(datastore=tmp_path / "ds", webdav_folder=tmp_path / "wd", admin_password="test-admin-pass1")
+    app = create_app(cfg)
+    audio = tmp_path / "ds" / "inbox" / "rec-audio-1" / "audio.m4a"
+    audio.parent.mkdir(parents=True)
+    audio.write_bytes(AUDIO)
+    tunnel = {"CF-Connecting-IP": "203.0.113.9"}
+    basic = ("admin", "test-admin-pass1")
+
+    with TestClient(app, client=("127.0.0.1", 50000)) as local:
+        got = local.get("/admin/recordings/rec-audio-1/audio")
+        assert got.status_code == 200
+        assert got.content == AUDIO
+        assert 'attachment; filename="rec-audio-1.m4a"' in got.headers["content-disposition"]
+        # An id that resolves outside the inbox is not a recording.
+        assert local.get("/admin/recordings/%2E%2E/audio").status_code == 404
+
+        assert local.post("/admin/recordings/rec-audio-1/play", follow_redirects=False).status_code == 303
+        assert local.post("/admin/recordings/rec-audio-1/folder", follow_redirects=False).status_code == 303
+        assert launched == [audio, ["explorer.exe", f"/select,{audio}"]]
+
+        # Through the tunnel the admin may download, but never drive this PC's desktop.
+        assert local.get("/admin/recordings/rec-audio-1/audio", headers=tunnel, auth=basic).status_code == 200
+        assert local.post("/admin/recordings/rec-audio-1/play", headers=tunnel, auth=basic).status_code == 403
+        assert local.post("/admin/recordings/rec-audio-1/folder", headers=tunnel, auth=basic).status_code == 403
+        assert len(launched) == 2

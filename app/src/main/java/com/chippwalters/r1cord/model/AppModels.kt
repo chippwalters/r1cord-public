@@ -36,7 +36,7 @@ data class PlaybackState(
     val durationMs: Long = 0,
     val error: String? = null,
 )
-enum class Screen { HOME, RECORDING, LIBRARY, DETAIL, CAMERA }
+enum class Screen { HOME, RECORDING, LIBRARY, DETAIL, CAMERA, VIEWER }
 data class UploadUiState(
     val recordingId: String,
     val fileIndex: Int,
@@ -70,6 +70,8 @@ data class AppUiState(
     val pairing: PairingUiState? = null,
     val paired: Boolean = false,
     val serverName: String = "",
+    /** Published summary page shown by the in-app viewer (Screen.VIEWER). */
+    val viewerUrl: String? = null,
 ) {
     val selected: RecordingItem? get() = recordings.firstOrNull { it.id == selectedId }
     val isCapturing: Boolean get() = capture.status != CaptureStatus.IDLE

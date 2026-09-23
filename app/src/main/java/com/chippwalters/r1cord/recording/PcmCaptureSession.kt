@@ -306,7 +306,7 @@ internal class PcmCaptureSession(
         if (pcm != null) {
             // RIFF stores its data size in 32 bits, so the container cannot exceed 4 GiB
             // (about 12.4 hours here). Stop truthfully rather than write a corrupt header.
-            check(committedSamples * 2 + length <= WAV_MAX_DATA_BYTES) {
+            check(!wavDataWouldOverflow(committedSamples, length)) {
                 "WAV recording reached the 4 GiB file limit."
             }
             pcm.write(data, length)
@@ -442,7 +442,7 @@ internal class PcmCaptureSession(
  *
  * The descriptor is borrowed: this never closes it, matching the muxer path.
  */
-private class WavWriter(descriptor: FileDescriptor) {
+internal class WavWriter(descriptor: FileDescriptor) {
     private val stream = FileOutputStream(descriptor)
     private val channel = stream.channel
 
@@ -464,28 +464,38 @@ private class WavWriter(descriptor: FileDescriptor) {
     fun flush() = stream.flush()
 
     private fun writeHeader(dataBytes: Long) {
-        val header = ByteBuffer.allocate(WAV_HEADER_BYTES).order(ByteOrder.LITTLE_ENDIAN)
-        val byteRate = SAMPLE_RATE * 2
-        header.put("RIFF".toByteArray(Charsets.US_ASCII))
-        header.putInt((WAV_HEADER_BYTES - 8 + dataBytes).toInt())
-        header.put("WAVE".toByteArray(Charsets.US_ASCII))
-        header.put("fmt ".toByteArray(Charsets.US_ASCII))
-        header.putInt(16)                 // PCM chunk size
-        header.putShort(1)                // format: PCM
-        header.putShort(1)                // channels: mono
-        header.putInt(SAMPLE_RATE)
-        header.putInt(byteRate)
-        header.putShort(2)                // block align: one 16-bit mono sample
-        header.putShort(16)               // bits per sample
-        header.put("data".toByteArray(Charsets.US_ASCII))
-        header.putInt(dataBytes.toInt())
-        header.flip()
+        val header = buildWavHeader(dataBytes)
         // Absolute write: leaves the append position of `stream` untouched.
         while (header.hasRemaining()) channel.write(header, (WAV_HEADER_BYTES - header.remaining()).toLong())
     }
 }
 
-private enum class Decision {
+/**
+ * The 44-byte RIFF/WAVE header for 48 kHz mono PCM16 with [dataBytes] of audio:
+ * "RIFF" + 32-bit file size, "WAVEfmt " + 16-byte PCM chunk, "data" + 32-bit data size,
+ * all little-endian. Pure so the container layout can be tested without a descriptor.
+ */
+internal fun buildWavHeader(dataBytes: Long): ByteBuffer {
+    val header = ByteBuffer.allocate(WAV_HEADER_BYTES).order(ByteOrder.LITTLE_ENDIAN)
+    val byteRate = SAMPLE_RATE * 2
+    header.put("RIFF".toByteArray(Charsets.US_ASCII))
+    header.putInt((WAV_HEADER_BYTES - 8 + dataBytes).toInt())
+    header.put("WAVE".toByteArray(Charsets.US_ASCII))
+    header.put("fmt ".toByteArray(Charsets.US_ASCII))
+    header.putInt(16)                 // PCM chunk size
+    header.putShort(1)                // format: PCM
+    header.putShort(1)                // channels: mono
+    header.putInt(SAMPLE_RATE)
+    header.putInt(byteRate)
+    header.putShort(2)                // block align: one 16-bit mono sample
+    header.putShort(16)               // bits per sample
+    header.put("data".toByteArray(Charsets.US_ASCII))
+    header.putInt(dataBytes.toInt())
+    header.flip()
+    return header
+}
+
+internal enum class Decision {
     /** Keep this frame. */
     COMMIT,
 
@@ -499,7 +509,7 @@ private enum class Decision {
     DISCARD,
 }
 
-private enum class Phase {
+internal enum class Phase {
     /** Speech: frames are committed. */
     ACTIVE,
 
@@ -515,7 +525,7 @@ private enum class Phase {
  * confirmation voting, a hangover and a minimum active hold. Pure Kotlin by design - the
  * recorder ships no native code - and allocation-free once constructed.
  */
-private class VoiceGate(sensitivity: Int) {
+internal class VoiceGate(sensitivity: Int) {
     private val level = sensitivity.coerceIn(0, START_OFFSET_DB.size - 1)
     private var noiseFloorDb = INITIAL_NOISE_FLOOR_DB
     private val recent = BooleanArray(CONFIRM_WINDOW)
@@ -606,28 +616,37 @@ private class VoiceGate(sensitivity: Int) {
 
 // --- Capture format -------------------------------------------------------------------
 private const val SAMPLE_RATE = 48_000
-private const val FRAME_MS = 20
-private const val FRAME_SAMPLES = SAMPLE_RATE / 1_000 * FRAME_MS
-private const val FRAME_BYTES = FRAME_SAMPLES * 2
+internal const val FRAME_MS = 20
+internal const val FRAME_SAMPLES = SAMPLE_RATE / 1_000 * FRAME_MS
+internal const val FRAME_BYTES = FRAME_SAMPLES * 2
 private const val BIT_RATE = 96_000
 private const val MAX_INPUT_SIZE = 16_384
-private const val WAV_HEADER_BYTES = 44
+internal const val WAV_HEADER_BYTES = 44
 /** RIFF's 32-bit data size, minus the header: about 12.4 hours of 48 kHz mono PCM16. */
-private const val WAV_MAX_DATA_BYTES = 0xFFFF_FFFFL - WAV_HEADER_BYTES
+internal const val WAV_MAX_DATA_BYTES = 0xFFFF_FFFFL - WAV_HEADER_BYTES
 private const val SILENT_DB = -96f
 
 // --- VAD timing (tunable) ------------------------------------------------------------
 /** Lead-in kept while gated and prepended on resume, so word onsets survive. */
-private const val PRE_ROLL_MS = 300
-private const val PRE_ROLL_FRAMES = PRE_ROLL_MS / FRAME_MS
+internal const val PRE_ROLL_MS = 300
+internal const val PRE_ROLL_FRAMES = PRE_ROLL_MS / FRAME_MS
 /** Silence still committed after speech ends, so trailing consonants survive. */
-private const val POST_ROLL_MS = 200
+internal const val POST_ROLL_MS = 200
 /** Continuous silence before the gate fully closes and AUTO_LISTENING is reported. */
-private const val HANG_MS = 2_000
+internal const val HANG_MS = 2_000
 /** Committing is held this long after every resume, to stop the gate chattering. */
-private const val MIN_ACTIVE_HOLD_MS = 500
-private const val CONFIRM_WINDOW = 5
-private const val CONFIRM_POSITIVES = 3
+internal const val MIN_ACTIVE_HOLD_MS = 500
+internal const val CONFIRM_WINDOW = 5
+internal const val CONFIRM_POSITIVES = 3
+
+/**
+ * True when appending [incomingBytes] of PCM16 to a WAV that already holds
+ * [committedSamples] samples would push the data chunk past RIFF's 32-bit size limit
+ * (see [WAV_MAX_DATA_BYTES]). The WAV capture path stops truthfully at that point
+ * rather than writing a header whose sizes wrap around.
+ */
+internal fun wavDataWouldOverflow(committedSamples: Long, incomingBytes: Int): Boolean =
+    committedSamples * 2L + incomingBytes > WAV_MAX_DATA_BYTES
 
 // --- VAD thresholds by sensitivity: 0 = high, 1 = balanced, 2 = noise-rejecting -------
 // Starting calibration values, not measured R1 microphone thresholds: tune here.

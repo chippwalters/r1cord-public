@@ -76,26 +76,45 @@
   {% endif %}
 </section>
 
-<section class="card">
+<section class="card" id="recent">
   <h2>Recent jobs</h2>
+  <div class="table-scroll">
   <table>
     <thead>
       <tr>
-        <th>Recording</th><th>Title</th><th>Status</th><th>Writer</th><th>Updated</th>
+        <th>Recording</th><th>Title</th><th>Size</th><th>Status</th><th>Writer</th><th>Updated</th><th>Audio</th>
       </tr>
     </thead>
     <tbody>
     {% for j in recent %}
+      {% set size = audio.get(j.recording_id) %}
       <tr>
-        <td><a href="/admin/jobs/{{ j.job_id }}">{{ j.recording_id }}</a></td>
+        <td class="nowrap"><a href="/admin/jobs/{{ j.job_id }}">{{ j.recording_id }}</a></td>
         <td>{{ j.title }}</td>
+        <td class="nowrap">{{ size or "—" }}</td>
         <td>{{ j.status }}</td>
         <td>{{ j.writer }}</td>
-        <td>{{ j.updated_at }}</td>
+        <td class="nowrap" title="{{ j.updated_at }}">{{ j.updated_at[:16] | replace("T", " ") }}Z</td>
+        <td class="actions">
+          {% if size %}
+          {% if local %}
+          <form method="post" action="/admin/recordings/{{ j.recording_id }}/play" title="Open in the default media player">
+            <button type="submit" class="btn-row"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5v11l9-5.5z"/></svg>Play</button>
+          </form>
+          {% endif %}
+          <a class="btn-row" href="/admin/recordings/{{ j.recording_id }}/audio" title="Download the audio file"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7 1h2v7.2l2.6-2.6 1.4 1.4L8 12 3 7l1.4-1.4L7 8.2zM2 13h12v2H2z"/></svg>Download</a>
+          {% if local %}
+          <form method="post" action="/admin/recordings/{{ j.recording_id }}/folder" title="Show the file in Explorer">
+            <button type="submit" class="btn-row"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1 3h5l1.5 1.5H15V13H1z"/></svg>Folder</button>
+          </form>
+          {% endif %}
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 
 <section class="card">

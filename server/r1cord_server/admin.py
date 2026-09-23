@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+import os
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -13,12 +16,13 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from .auth import require_admin
+from .auth import is_local_direct, require_admin
 from .config import RUN_MODES, USB_ACTIONS, Config, save, with_updates
-from .store import RetryNotAllowed, StoreError, utcnow_iso
+from .store import AUDIO_NAMES, RetryNotAllowed, StoreError, utcnow_iso
 from .usb import UsbWatcher
 
 router = APIRouter()
+log = logging.getLogger("r1cord_server.admin")
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "templates"))
 
 _EDITABLE = (
@@ -45,6 +49,9 @@ _EDITABLE = (
     "usb_device_root",
     "run_mode",
     "idle_exit_min",
+    "email_enabled",
+    "email_to",
+    "gws_cmd",
 )
 _PROCESSING = {
     "queued",
@@ -145,12 +152,42 @@ def _running(store: Any) -> dict[str, Any] | None:
     return None
 
 
-def _save_config(request: Request, new_config: Config) -> None:
-    path = getattr(request.app.state, "config_path", Path(new_config.datastore) / "config.toml")
+def apply_config(app: Any, new_config: Config) -> None:
+    """Save config.toml and swap the live config into every component that holds one."""
+    path = getattr(app.state, "config_path", Path(new_config.datastore) / "config.toml")
     save(new_config, path)
-    request.app.state.config = new_config
-    request.app.state.store.config = new_config
-    request.app.state.worker.config = new_config
+    app.state.config = new_config
+    app.state.store.config = new_config
+    app.state.worker.config = new_config
+
+
+def _audio_file(config: Config, recording_id: str) -> Path | None:
+    """The recording's audio in the inbox, or None. Rejects ids that would leave the inbox."""
+    inbox = (Path(config.datastore) / "inbox").resolve()
+    folder = (inbox / recording_id).resolve()
+    if folder.parent != inbox:
+        return None
+    for name in sorted(AUDIO_NAMES):
+        path = folder / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _human_size(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"
+
+
+def _local_only(request: Request) -> HTMLResponse | None:
+    """Play / Open folder act on this PC's desktop; never on behalf of a tunnel or proxy caller."""
+    if is_local_direct(request):
+        return None
+    return HTMLResponse("Only available on the server PC itself.", status_code=403)
 
 
 @router.get("/admin", response_class=HTMLResponse)
@@ -160,23 +197,76 @@ def dashboard(request: Request, _admin: Annotated[str, Depends(require_admin)]) 
     queue = [j for j in store.recent_jobs(50) if j.status == "queued"]
     # oldest queued first
     queue.sort(key=lambda j: j.created_at)
+    recent = store.recent_jobs(50)
+    audio: dict[str, str] = {}
+    for job in recent:
+        if job.recording_id not in audio:
+            path = _audio_file(config, job.recording_id)
+            audio[job.recording_id] = _human_size(path.stat().st_size) if path else ""
     return _templates(
         request,
         "dashboard.html",
         health=_health(config, store),
         running=_running(store),
         queue=queue,
-        recent=store.recent_jobs(50),
+        recent=recent,
+        audio=audio,
+        local=is_local_direct(request),
         tokens=store.tokens(),
         usb=request.app.state.usb.status(),
         now=utcnow_iso(),
     )
 
 
+@router.get("/admin/recordings/{recording_id}/audio", response_model=None)
+def recording_audio(
+    recording_id: str,
+    request: Request,
+    _admin: Annotated[str, Depends(require_admin)],
+) -> FileResponse | HTMLResponse:
+    path = _audio_file(request.app.state.config, recording_id)
+    if path is None:
+        return HTMLResponse("no audio for this recording", status_code=404)
+    return FileResponse(path, filename=f"{recording_id}{path.suffix}")
+
+
+@router.post("/admin/recordings/{recording_id}/play", response_model=None)
+def recording_play(
+    recording_id: str,
+    request: Request,
+    _admin: Annotated[str, Depends(require_admin)],
+) -> RedirectResponse | HTMLResponse:
+    denied = _local_only(request)
+    if denied is not None:
+        return denied
+    path = _audio_file(request.app.state.config, recording_id)
+    if path is None:
+        return HTMLResponse("no audio for this recording", status_code=404)
+    os.startfile(path)  # type: ignore[attr-defined]  # Windows: the default media player
+    return RedirectResponse(url="/admin#recent", status_code=303)
+
+
+@router.post("/admin/recordings/{recording_id}/folder", response_model=None)
+def recording_folder(
+    recording_id: str,
+    request: Request,
+    _admin: Annotated[str, Depends(require_admin)],
+) -> RedirectResponse | HTMLResponse:
+    denied = _local_only(request)
+    if denied is not None:
+        return denied
+    path = _audio_file(request.app.state.config, recording_id)
+    if path is None:
+        return HTMLResponse("no audio for this recording", status_code=404)
+    # explorer.exe returns 1 even on success; Popen and forget.
+    subprocess.Popen(["explorer.exe", f"/select,{path}"])  # noqa: S603, S607
+    return RedirectResponse(url="/admin#recent", status_code=303)
+
+
 @router.post("/admin/usb/toggle")
 def usb_toggle(request: Request, _admin: Annotated[str, Depends(require_admin)]) -> RedirectResponse:
     old: Config = request.app.state.config
-    _save_config(request, with_updates(old, usb_enabled=not old.usb_enabled))
+    apply_config(request.app, with_updates(old, usb_enabled=not old.usb_enabled))
     request.app.state.usb.poll_now()
     return RedirectResponse(url="/admin", status_code=303)
 
@@ -256,6 +346,7 @@ def device_process(
     try:
         rec = store.process_inbox(recording_id, action=action.strip())
     except (StoreError, ValueError, OSError) as exc:
+        log.warning("process %s/%s failed: %s", serial, recording_id, exc)
         return RedirectResponse(
             url=f"/admin/devices?error={quote(f'{recording_id}: {exc}')}", status_code=303
         )
@@ -294,9 +385,12 @@ def job_page(
     _admin: Annotated[str, Depends(require_admin)],
 ) -> HTMLResponse:
     store = request.app.state.store
+    notice = request.query_params.get("notice")
+    sent = request.query_params.get("sent")
     rec = store.job(job_id)
     if rec is None:
-        return _templates(request, "job.html", job=None, job_id=job_id)
+        # notice/sent still render: an email or retry against a vanished job must explain itself.
+        return _templates(request, "job.html", job=None, job_id=job_id, notice=notice, sent=sent)
     result = store.result_json(job_id)
     log_lines = store.read_log(job_id, tail=200)
     outbox = store.outbox_dir(rec.recording_id)
@@ -306,7 +400,6 @@ def job_page(
             if path.is_file():
                 files.append(path.relative_to(outbox).as_posix())
     active = rec.status not in {"complete", "error"}
-    notice = request.query_params.get("notice")
     return _templates(
         request,
         "job.html",
@@ -318,7 +411,25 @@ def job_page(
         active=active,
         refresh=active,
         notice=notice,
+        sent=sent,
     )
+
+
+@router.post("/admin/jobs/{job_id}/email")
+def admin_email_job(
+    job_id: str,
+    request: Request,
+    _admin: Annotated[str, Depends(require_admin)],
+) -> RedirectResponse:
+    from .mailer import MailError, email_job
+
+    config: Config = request.app.state.config
+    try:
+        email_job(request.app.state.store, config, job_id)
+    except (MailError, StoreError) as exc:
+        log.warning("email for %s failed: %s", job_id, exc)
+        return RedirectResponse(url=f"/admin/jobs/{job_id}?notice={quote(f'Email: {exc}')}", status_code=303)
+    return RedirectResponse(url=f"/admin/jobs/{job_id}?sent={quote(config.email_to.strip())}", status_code=303)
 
 
 @router.post("/admin/jobs/{job_id}/retry-writer")
@@ -362,19 +473,27 @@ def admin_file(
     request: Request,
     _admin: Annotated[str, Depends(require_admin)],
 ) -> FileResponse | HTMLResponse:
-    store = request.app.state.store
-    outbox = store.outbox_dir(recording_id).resolve()
+    # Resolve both halves by hand: never mkdir for a hostile id, and never let either the
+    # recording id or the file name step outside that recording's outbox folder.
+    outbox_root = (Path(request.app.state.config.datastore) / "outbox").resolve()
+    outbox = (outbox_root / recording_id).resolve()
     target = (outbox / name).resolve()
-    if outbox not in target.parents and target != outbox:
+    if outbox.parent != outbox_root or (outbox != target and outbox not in target.parents):
+        log.info("files: rejected %r / %r", recording_id, name)
         return HTMLResponse("invalid path", status_code=400)
     if not target.is_file():
         return HTMLResponse("not found", status_code=404)
     return FileResponse(target)
 
-
 @router.get("/admin/config", response_class=HTMLResponse)
 def config_page(request: Request, _admin: Annotated[str, Depends(require_admin)]) -> HTMLResponse:
-    return _templates(request, "config.html", saved=False, restart_note=False)
+    return _templates(request, "config.html", saved=False, restart_note=False, gws_path=_gws_path(request))
+
+
+def _gws_path(request: Request) -> str | None:
+    from .mailer import gws_executable
+
+    return gws_executable(request.app.state.config.gws_cmd)
 
 
 @router.post("/admin/config", response_class=HTMLResponse)
@@ -404,6 +523,9 @@ def config_save(
     usb_device_root: Annotated[str, Form()] = "",
     run_mode: Annotated[str, Form()] = "",
     idle_exit_min: Annotated[int, Form()] = 10,
+    email_enabled: Annotated[str, Form()] = "",
+    email_to: Annotated[str, Form()] = "",
+    gws_cmd: Annotated[str, Form()] = "",
     new_admin_password: Annotated[str, Form()] = "",
 ) -> HTMLResponse:
     old: Config = request.app.state.config
@@ -431,6 +553,9 @@ def config_save(
         "usb_device_root": usb_device_root.strip().rstrip("/") or old.usb_device_root,
         "run_mode": run_mode.strip() or old.run_mode,
         "idle_exit_min": max(1, int(idle_exit_min)),
+        "email_enabled": email_enabled == "on",
+        "email_to": email_to.strip(),
+        "gws_cmd": gws_cmd.strip() or old.gws_cmd,
     }
     if changes["usb_auto_action"] not in USB_ACTIONS:
         changes["usb_auto_action"] = old.usb_auto_action
@@ -442,12 +567,12 @@ def config_save(
         from dataclasses import replace
 
         new_config = replace(new_config, admin_password=rotated)
-    _save_config(request, new_config)
+    apply_config(request.app, new_config)
     request.app.state.usb.poll_now()
     restart = (
         new_config.listen_host != old.listen_host or new_config.listen_port != old.listen_port
     )
-    return _templates(request, "config.html", saved=True, restart_note=restart)
+    return _templates(request, "config.html", saved=True, restart_note=restart, gws_path=_gws_path(request))
 
 
 @router.get("/admin/import", response_class=HTMLResponse)

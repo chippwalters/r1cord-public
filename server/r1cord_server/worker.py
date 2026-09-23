@@ -50,6 +50,23 @@ class Worker:
                     self.store.set_status(job.job_id, "error", error=f"worker: {exc}")
                 except Exception:
                     log.exception("failed to record worker error for %s", job.job_id)
+                continue
+            self._email_if_complete(job.job_id)
+
+    def _email_if_complete(self, job_id: str) -> None:
+        """A failed email is logged to the job; it never changes the job's status."""
+        if not self.config.email_enabled:
+            return
+        rec = self.store.job(job_id)
+        if rec is None or rec.status != "complete":
+            return
+        from . import mailer
+
+        try:
+            mailer.email_job(self.store, self.config, job_id)
+        except Exception as exc:
+            log.warning("worker: job %s email failed: %s", job_id, exc)
+            self.store.append_log(job_id, f"email: failed: {exc}")
 
     def _run_job(self, job: JobRecord) -> None:
         fresh = self.store.job(job.job_id)
@@ -60,6 +77,7 @@ class Worker:
             from .pipeline import asr, writers, publish, instructions
             from .mddocs import MdDocsBridge
         except ImportError as exc:
+            log.warning("worker: job %s failed to import pipeline: %s", job.job_id, exc)
             self.store.set_status(job.job_id, "error", error=f"pipeline: {exc}")
             return
 
@@ -101,6 +119,7 @@ class Worker:
         if not audio.is_file():
             audio = inbox / "audio.wav"
         if not audio.is_file():
+            log.warning("worker: job %s (%s) asr failed: no audio file in inbox", job.job_id, job.recording_id)
             self.store.set_status(job.job_id, "error", error="asr: no audio file in inbox")
             return False
         language = (self.config.asr_language or "").strip() or None
@@ -115,6 +134,7 @@ class Worker:
                 log=job_log,
             )
         except Exception as exc:
+            log.warning("worker: job %s asr failed: %s", job.job_id, exc)
             timings["asr"] = int((time.perf_counter() - t0) * 1000)
             self.store.set_status(
                 job.job_id,
@@ -173,6 +193,7 @@ class Worker:
             )
             (work / "INSTRUCTIONS.md").write_text(text, encoding="utf-8")
         except Exception as exc:
+            log.warning("worker: job %s writer failed: %s", job.job_id, exc)
             self.store.set_status(job.job_id, "error", error=f"writer: {exc}", timings=timings)
             return False
 
@@ -186,6 +207,7 @@ class Worker:
                 log=job_log,
             )
         except Exception as exc:
+            log.warning("worker: job %s writer failed: %s", job.job_id, exc)
             timings["writer"] = int((time.perf_counter() - t0) * 1000)
             self.store.set_status(job.job_id, "error", error=f"writer: {exc}", timings=timings)
             return False
@@ -198,6 +220,7 @@ class Worker:
                 if src.is_file():
                     shutil.copy2(src, out_photos / src.name)
         except Exception as exc:
+            log.warning("worker: job %s writer failed: %s", job.job_id, exc)
             self.store.set_status(job.job_id, "error", error=f"writer: {exc}", timings=timings)
             return False
         self.store.set_status(job.job_id, "written", timings=timings)
@@ -238,11 +261,13 @@ class Worker:
         outbox = self.store.outbox_dir(job.recording_id)
         summary_md = outbox / "summary.md"
         if not summary_md.is_file():
+            log.warning("worker: job %s publish failed: summary.md is missing", job.job_id)
             self.store.set_status(job.job_id, "error", error="publish: summary.md is missing", timings=timings)
             return False
         photos_dir = outbox / "photos"
         photos_dir.mkdir(exist_ok=True)
         if not job.publish_folder:
+            log.warning("worker: job %s publish failed: publish folder is not set", job.job_id)
             self.store.set_status(job.job_id, "error", error="publish: publish folder is not set", timings=timings)
             return False
         folder = Path(job.publish_folder)
@@ -258,6 +283,7 @@ class Worker:
                 log=job_log,
             )
         except Exception as exc:
+            log.warning("worker: job %s publish failed: %s", job.job_id, exc)
             timings["publish"] = int((time.perf_counter() - t0) * 1000)
             self.store.set_status(job.job_id, "error", error=f"publish: {exc}", timings=timings)
             return False

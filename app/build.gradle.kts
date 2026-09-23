@@ -11,8 +11,8 @@ android {
         applicationId = "com.chippwalters.r1cord"
         minSdk = 33
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.3.1"
+        versionCode = 14
+        versionName = "0.3.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // Release signing credentials live in ~/.gradle/gradle.properties (never in this repo).
@@ -39,6 +39,12 @@ android {
             signingConfig = signingConfigs.findByName("release")
         }
     }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+            isReturnDefaultValues = true
+        }
+    }
 }
 dependencies {
     implementation("androidx.core:core-ktx:1.17.0")
@@ -63,4 +69,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("androidx.security:security-crypto:1.1.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.json:json:20240303")
+    testImplementation("org.robolectric:robolectric:4.16")
+    testImplementation("androidx.test:core:1.7.0")
 }

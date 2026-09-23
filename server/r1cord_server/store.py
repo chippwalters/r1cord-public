@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import shutil
@@ -21,6 +22,7 @@ from .config import Config
 from . import naming
 
 SCHEMA_VERSION = 1
+_log = logging.getLogger(__name__)
 ACTIVE_STATUSES = (
     "uploading",
     "queued",
@@ -40,6 +42,23 @@ SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 STYLES = frozenset({"notes", "minutes", "article"})
 WRITERS = frozenset({"claude_code", "codex", "grok_build", "none"})
 USB_ACTIONS = frozenset({"transcribe", "summarize", "publish"})
+
+def _check_recording_id(recording_id: str) -> None:
+    """Recording ids become folder names under inbox/ and outbox/.
+
+    Refuse anything that could escape those roots ("..", separators) or that
+    Windows would normalize into a different name (surrounding whitespace).
+    """
+    if (
+        not recording_id
+        or recording_id in (".", "..")
+        or "/" in recording_id
+        or "\\" in recording_id
+        or "\x00" in recording_id
+        or recording_id != recording_id.strip()
+    ):
+        raise ValueError(f"invalid recordingId: {recording_id!r}")
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tokens (
@@ -318,6 +337,7 @@ class JobStore:
     # --- paths -------------------------------------------------------------
 
     def inbox_dir(self, recording_id: str) -> Path:
+        _check_recording_id(recording_id)
         path = Path(self.config.datastore) / "inbox" / recording_id
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -331,6 +351,7 @@ class JobStore:
         return path
 
     def outbox_dir(self, recording_id: str) -> Path:
+        _check_recording_id(recording_id)
         path = Path(self.config.datastore) / "outbox" / recording_id
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -352,6 +373,7 @@ class JobStore:
                     return code
                 except sqlite3.IntegrityError:
                     continue
+        _log.warning("store: could not allocate a pairing code after 20 attempts")
         raise StoreError("could not allocate a pairing code")
 
     def redeem_pair_code(self, code: str, label: str) -> str | None:
@@ -503,7 +525,7 @@ class JobStore:
         with self._lock:
             row = self._conn.execute(
                 "SELECT * FROM jobs WHERE recording_id = ? AND status NOT IN ('complete', 'error') "
-                "ORDER BY created_at DESC LIMIT 1",
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
                 (recording_id,),
             ).fetchone()
             return self._job_from_row(row) if row else None
@@ -546,7 +568,7 @@ class JobStore:
     def recent_jobs(self, limit: int = 50) -> list[JobRecord]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM jobs ORDER BY updated_at DESC LIMIT ?",
+                "SELECT * FROM jobs ORDER BY updated_at DESC, rowid DESC LIMIT ?",
                 (limit,),
             ).fetchall()
             return [self._job_from_row(r) for r in rows]
@@ -554,7 +576,7 @@ class JobStore:
     def next_queued(self) -> JobRecord | None:
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC LIMIT 1"
+                "SELECT * FROM jobs WHERE status = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT 1"
             ).fetchone()
             return self._job_from_row(row) if row else None
 
@@ -636,7 +658,7 @@ class JobStore:
         with self._lock:
             rows = self._conn.execute(
                 "SELECT job_id, writer, status, finished_at FROM jobs "
-                "WHERE recording_id = ? ORDER BY created_at ASC",
+                "WHERE recording_id = ? ORDER BY created_at ASC, rowid ASC",
                 (rec.recording_id,),
             ).fetchall()
         for row in rows:
@@ -888,6 +910,7 @@ class JobStore:
         recording_id = str(metadata.get("id") or "").strip()
         if not recording_id:
             raise ValueError("metadata.json missing id")
+        _check_recording_id(recording_id)
         chosen_title = (title or str(metadata.get("title") or "")).strip()
         if not chosen_title:
             chosen_title = "recording"
@@ -1195,8 +1218,7 @@ class JobStore:
             raise ValueError("title must be 1–120 characters")
         if job.summary_style not in STYLES:
             raise ValueError(f"invalid summaryStyle: {job.summary_style}")
-        if not job.recording_id or "/" in job.recording_id or "\\" in job.recording_id:
-            raise ValueError("invalid recordingId")
+        _check_recording_id(job.recording_id)
         if not job.files:
             raise ValueError("files manifest is empty")
         audio_count = 0

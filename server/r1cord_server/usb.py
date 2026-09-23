@@ -124,6 +124,10 @@ def parse_track_frames(buf: bytes) -> tuple[list[str], bytes]:
             raise AdbError(f"track-devices: bad frame prefix {buf[:4]!r}") from None
         if len(buf) < 4 + n:
             break
+        if len(buf) == 4 + n and buf[-1:] == b"\r":
+            # The frame body ends in a bare \r that may be the first half of a \r\n pair
+            # split across chunk reads; wait for the next byte before consuming.
+            break
         frames.append(buf[4 : 4 + n].decode("utf-8", errors="replace"))
         buf = buf[4 + n :]
     return frames, buf
@@ -153,11 +157,15 @@ class UsbWatcher:
         *,
         request_exit: Callable[[], None] | None = None,
         last_activity: Callable[[], float | None] | None = None,
+        open_dashboard: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
         self._config = config_ref
         self._request_exit = request_exit
         self._last_activity = last_activity or (lambda: None)
+        self._open_dashboard = open_dashboard
+        # Serials adb listed at the previous pass; None until the first pass sets the baseline.
+        self._present: set[str] | None = None
         self._stop = threading.Event()
         self._events: queue.Queue[_Event] = queue.Queue()
         self._thread: threading.Thread | None = None
@@ -231,6 +239,7 @@ class UsbWatcher:
                 with self._state_lock:
                     self._connected = []
                     self._syncing = None
+                self._present = None
                 if cfg.usb_enabled:
                     self._set_error(f"adb not found: {cfg.adb_cmd}")
                 self._idle_check(cfg)
@@ -323,6 +332,7 @@ class UsbWatcher:
             self.store.upsert_device_seen(dev.serial, dev.model)
         with self._state_lock:
             self._connected = [(d.serial, d.model, d.serial in adopted) for d in devices]
+        self._announce_arrivals(devices, adopted)
         failed = False
         for dev in devices:
             if dev.serial not in adopted:
@@ -347,6 +357,26 @@ class UsbWatcher:
         self._reversed &= present
         if not failed:
             self._set_error(None)
+
+    def _announce_arrivals(self, devices: list[UsbDevice], adopted: set[str]) -> None:
+        """Open the dashboard when an adopted device appears on the cable.
+
+        The first pass after start (or after USB mode is switched back on) only records what is
+        already plugged in: a server restart must not pop a browser tab. Presence is tracked for
+        every serial, so adopting an already-connected device on the Devices page is not an arrival.
+        """
+        serials = {d.serial for d in devices}
+        previous, self._present = self._present, serials
+        if previous is None or self._open_dashboard is None:
+            return
+        arrived = sorted(s for s in serials - previous if s in adopted)
+        if not arrived:
+            return
+        log.info("usb: %s plugged in; opening the dashboard", ", ".join(arrived))
+        try:
+            self._open_dashboard()
+        except Exception as exc:  # a missing browser must never stop the sync
+            log.warning("usb: could not open the dashboard: %s", exc)
 
     def _idle_check(self, cfg: Config, now: float | None = None) -> bool:
         """In `plug` mode, ask the server to exit once nothing has needed it for `idle_exit_min`."""

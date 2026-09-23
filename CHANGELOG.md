@@ -3,6 +3,28 @@
 Versions are the app's `versionName`; the desktop companion carries its own version in
 `server/pyproject.toml` and is noted where it changed.
 
+## 0.3.2 — summaries open in the app; companion tray icon and email (companion 0.3.0)
+
+- **Summaries open inside R1CORD.** Open summary, the "Sent" dialog's Open and the Sent
+  notification show the published page in a full-screen in-app viewer (close, title, reload; Back
+  walks page history; an error screen with Retry). The app no longer hands the link to the
+  device browser, which on some Android builds closes itself seconds after opening.
+- **Clearer send errors.** When the Server URL answers but the companion behind it is down (for
+  example a tunnel with no origin), the app says the desktop server is not reachable and shows the
+  HTTP status, instead of a generic "could not create the upload job".
+- **Companion tray icon.** While running on Windows the companion shows the R1CORD logomark in the
+  notification area: status on hover, click for the admin page, a right-click menu with the admin
+  pages, USB mode and email switches, the data and log folders, and Quit. A Windows notification
+  appears when a job finishes or fails.
+- **Admin page opens when the device is plugged in** (adopted devices only; not on server start).
+- **Recent jobs**: each recording shows its audio size with Play (default media player),
+  Download and Folder buttons. Play and Folder work only on the PC itself, never through a proxy
+  or tunnel.
+- **Email on completion** (optional): each finished job's summary or transcript is emailed
+  through a signed-in Google Workspace CLI (`gws`), with the published page link; a job page can
+  resend it.
+- Unit tests for the Android client (JVM + Robolectric) and a much larger companion test suite.
+
 ## 0.3.1 — signed release build, USB mode (companion 0.2.0)
 
 - **Desktop companion, USB mode.** Plug an adopted device in and every finished recording is

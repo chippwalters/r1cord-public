@@ -22,6 +22,7 @@ import com.chippwalters.r1cord.sync.OffloadSettings
 import com.chippwalters.r1cord.sync.SendResult
 import com.chippwalters.r1cord.sync.deviceBadge
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,6 +46,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
     )
     val state = mutableState.asStateFlow()
     private var detailReturn = Screen.HOME
+    private var viewerReturn = Screen.HOME
     private var seenCompletedId: String? = null
     private var uploadJob: Job? = null
 
@@ -148,6 +150,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
             Screen.DETAIL -> { graph.playback.stop(); mutableState.update { it.copy(screen = if (it.isCapturing) Screen.RECORDING else detailReturn) } }
             Screen.LIBRARY -> home()
             Screen.RECORDING -> if (state.value.isCapturing) showError("Stop the recording before leaving this screen.") else home()
+            Screen.VIEWER -> mutableState.update { it.copy(screen = if (it.isCapturing) Screen.RECORDING else viewerReturn, viewerUrl = null) }
             Screen.HOME -> Unit
         }
     }
@@ -334,12 +337,14 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
         mutableState.update { it.copy(paired = false, serverName = "", pairing = null) }
     }
 
-    fun openUrl(url: String) {
-        runCatching {
-            getApplication<Application>().startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            )
-        }.onFailure { showError(it.message ?: "Could not open the link.") }
+    /** Shows a published summary page in the in-app viewer; the device's browser is not used. */
+    fun openSummary(url: String) {
+        val scheme = Uri.parse(url).scheme?.lowercase(Locale.ROOT)
+        if (scheme != "https" && scheme != "http") { showError("Not a web link: $url"); return }
+        graph.playback.stop()
+        val current = state.value
+        if (current.screen != Screen.VIEWER) viewerReturn = current.screen
+        mutableState.update { it.copy(screen = Screen.VIEWER, viewerUrl = url, sendResult = null) }
     }
 
     private fun startUpload(block: suspend () -> Unit) {
@@ -367,11 +372,9 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                 }
             )
             val text = "Sent. Your summary will appear at the link in a few minutes."
-            val intent = if (!result.webdavUrl.isNullOrBlank()) {
-                Intent(Intent.ACTION_VIEW, Uri.parse(result.webdavUrl)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            } else {
-                Intent(app, com.chippwalters.r1cord.MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            }
+            val intent = Intent(app, com.chippwalters.r1cord.MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            if (!result.webdavUrl.isNullOrBlank()) intent.putExtra(com.chippwalters.r1cord.MainActivity.EXTRA_SUMMARY_URL, result.webdavUrl)
             val pending = PendingIntent.getActivity(
                 app,
                 result.recordingId.hashCode(),

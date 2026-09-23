@@ -20,15 +20,34 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+/** Meter fill color choice, extracted so the rule is testable without rendering. */
+internal enum class BatteryTone { LOW, CHARGING, NORMAL }
+
+/** Battery percentage clamped to the meter's 0..100 range. */
+internal fun batteryLevel(percent: Int): Int = percent.coerceIn(0, 100)
+
+/** Low battery always wins over charging; otherwise charging shows teal and idle white. */
+internal fun batteryTone(level: Int, isCharging: Boolean): BatteryTone =
+    if (level <= 15) BatteryTone.LOW else if (isCharging) BatteryTone.CHARGING else BatteryTone.NORMAL
+
+/** Accessibility text spoken for the meter, e.g. "Battery 62 percent, charging". */
+internal fun batteryDescription(level: Int, isCharging: Boolean): String =
+    "Battery $level percent" + if (isCharging) ", charging" else ", not charging"
+
 @Composable
 fun BatteryStatus(percent: Int, isCharging: Boolean) {
-    val level = percent.coerceIn(0, 100)
-    val fill = if (level <= 15) Orange else if (isCharging) Teal else White
+    val level = batteryLevel(percent)
+    val tone = batteryTone(level, isCharging)
+    val fill = when (tone) {
+        BatteryTone.LOW -> Orange
+        BatteryTone.CHARGING -> Teal
+        BatteryTone.NORMAL -> White
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier.semantics(mergeDescendants = true) {
-            contentDescription = "Battery $level percent" + if (isCharging) ", charging" else ", not charging"
+            contentDescription = batteryDescription(level, isCharging)
         },
     ) {
         if (isCharging) Icon(Icons.Default.Bolt, null, Modifier.size(20.dp), tint = Teal)

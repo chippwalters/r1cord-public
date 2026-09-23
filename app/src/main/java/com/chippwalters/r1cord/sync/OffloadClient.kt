@@ -3,6 +3,7 @@ package com.chippwalters.r1cord.sync
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.util.Log
 import java.io.IOException
 import java.io.InputStream
 import java.util.concurrent.TimeUnit
@@ -29,8 +30,8 @@ class OffloadException(
     val code: String? = null,
     val jobId: String? = null,
     val received: Long? = null,
+    val files: List<String>? = null,
 ) : Exception(message)
-
 data class PairResult(val token: String, val serverName: String)
 
 data class FileEntry(val name: String, val size: Long, val sha256: String)
@@ -62,8 +63,18 @@ data class RecordingStatus(
     val updatedAt: String?,
 )
 
-class OffloadClient(context: Context) {
-    private val context = context.applicationContext
+class OffloadClient internal constructor(
+    private val serverUrl: () -> String,
+    private val token: () -> String?,
+    private val hasValidatedNetwork: () -> Boolean,
+    private val usbUrl: String = USB_URL,
+) {
+    constructor(context: Context) : this(
+        serverUrl = { OffloadSettings.serverUrl(context.applicationContext) },
+        token = { OffloadSettings.token(context.applicationContext) },
+        hasValidatedNetwork = { validatedNetwork(context.applicationContext) },
+    )
+
     private val http = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
@@ -80,7 +91,8 @@ class OffloadClient(context: Context) {
 
     suspend fun pair(code: String): PairResult = withContext(Dispatchers.IO) {
         val body = JSONObject().put("code", code.trim()).toString()
-        val response = execute(request("POST", listOf("v1", "pair"), jsonBody(body), authenticated = false))
+        val req = request("POST", listOf("v1", "pair"), jsonBody(body), authenticated = false)
+        val response = execute(req)
         response.use { result ->
             val text = result.body?.string().orEmpty()
             if (result.code == 200) {
@@ -89,7 +101,7 @@ class OffloadClient(context: Context) {
                     ?: throw OffloadException("Pairing response was missing a token.")
                 PairResult(token, json.optString("serverName"))
             } else {
-                throw errorOf(result.code, text, "Pairing failed.")
+                throw errorOf(result.code, text, "Pairing failed.").logged(req, result.code)
             }
         }
     }
@@ -99,7 +111,8 @@ class OffloadClient(context: Context) {
             .put("job", jobJson(job))
             .put("metadata", JSONObject(metadataJson))
             .toString()
-        val response = execute(request("POST", listOf("v1", "jobs"), jsonBody(payload)))
+        val req = request("POST", listOf("v1", "jobs"), jsonBody(payload))
+        val response = execute(req)
         response.use { result ->
             val text = result.body?.string().orEmpty()
             when (result.code) {
@@ -107,12 +120,13 @@ class OffloadClient(context: Context) {
                 409 -> {
                     val error = errorOf(result.code, text, "Job conflict.")
                     if (error.code == "job_active" && !error.jobId.isNullOrBlank()) {
+                        Log.i(TAG, "POST ${req.url.encodedPath} job_active; resuming job ${error.jobId}")
                         JobCreated(jobId = error.jobId, resumed = true)
                     } else {
-                        throw error
+                        throw error.logged(req, result.code)
                     }
                 }
-                else -> throw errorOf(result.code, text, "Could not create the upload job.")
+                else -> throw errorOf(result.code, text, "Could not create the upload job.").logged(req, result.code)
             }
         }
     }
@@ -120,12 +134,13 @@ class OffloadClient(context: Context) {
     // GET with a JSON body, not HEAD on the file path: Cloudflare rewrites HEAD to GET for
     // paths ending in cacheable extensions such as .jpg (observed 2026-09-21).
     suspend fun received(jobId: String, name: String): Long = withContext(Dispatchers.IO) {
-        val response = execute(request("GET", listOf("v1", "jobs", jobId, "files", name, "received")))
+        val req = request("GET", listOf("v1", "jobs", jobId, "files", name, "received"))
+        val response = execute(req)
         response.use { result ->
             val text = result.body?.string().orEmpty()
             when (result.code) {
                 200 -> parseObject(text).optLong("received", 0L).coerceAtLeast(0)
-                else -> throw errorOf(result.code, text, "Could not check uploaded bytes for $name.")
+                else -> throw errorOf(result.code, text, "Could not check uploaded bytes for $name.").logged(req, result.code)
             }
         }
     }
@@ -155,37 +170,38 @@ class OffloadClient(context: Context) {
                 }
             }
         }
-        val response = execute(
-            request(
-                "PUT",
-                listOf("v1", "jobs", jobId, "files", name),
-                body,
-                query = listOf("offset" to offset.toString()),
-            )
+        val req = request(
+            "PUT",
+            listOf("v1", "jobs", jobId, "files", name),
+            body,
+            query = listOf("offset" to offset.toString()),
         )
+        val response = execute(req)
         response.use { result ->
             val text = result.body?.string().orEmpty()
             when (result.code) {
                 200 -> parseObject(text).optLong("received", offset + length)
-                else -> throw errorOf(result.code, text, "Upload of $name failed.")
+                else -> throw errorOf(result.code, text, "Upload of $name failed.").logged(req, result.code)
             }
         }
     }
 
     suspend fun commit(jobId: String): JobCreated = withContext(Dispatchers.IO) {
-        val response = execute(request("POST", listOf("v1", "jobs", jobId, "commit"), EMPTY))
+        val req = request("POST", listOf("v1", "jobs", jobId, "commit"), EMPTY)
+        val response = execute(req)
         response.use { result ->
             val text = result.body?.string().orEmpty()
             if (result.code == 200) parseJobCreated(text, resumed = false)
-            else throw errorOf(result.code, text, "Commit failed.")
+            else throw errorOf(result.code, text, "Commit failed.").logged(req, result.code)
         }
     }
 
     suspend fun recordings(): List<RecordingStatus> = withContext(Dispatchers.IO) {
-        val response = execute(request("GET", listOf("v1", "recordings")))
+        val req = request("GET", listOf("v1", "recordings"))
+        val response = execute(req)
         response.use { result ->
             val text = result.body?.string().orEmpty()
-            if (result.code != 200) throw errorOf(result.code, text, "Could not refresh send status.")
+            if (result.code != 200) throw errorOf(result.code, text, "Could not refresh send status.").logged(req, result.code)
             val array = JSONArray(text)
             List(array.length()) { index ->
                 val item = array.getJSONObject(index)
@@ -246,20 +262,20 @@ class OffloadClient(context: Context) {
             else -> error("Unsupported method $method")
         }
         if (authenticated) {
-            val token = OffloadSettings.token(context)
+            val bearer = token()
                 ?: throw OffloadException(UNPAIRED)
-            builder.header("Authorization", "Bearer $token")
+            builder.header("Authorization", "Bearer $bearer")
         }
         return builder.build()
     }
 
     private fun endpoint(segments: List<String>, query: List<Pair<String, String>>): HttpUrl {
         val base = if (hasValidatedNetwork()) {
-            val configured = OffloadSettings.serverUrl(context).trim().trimEnd('/')
+            val configured = serverUrl().trim().trimEnd('/')
             if (configured.isEmpty()) throw OffloadException("Set the server URL in Settings.")
             configured
         } else {
-            USB_URL
+            usbUrl
         }
         val builder = base.toHttpUrlOrNull()?.newBuilder()
             ?: throw OffloadException("Server URL is not valid. Check it in Settings.")
@@ -268,11 +284,10 @@ class OffloadClient(context: Context) {
         return builder.build()
     }
 
-    private fun hasValidatedNetwork(): Boolean {
-        val manager = context.getSystemService(ConnectivityManager::class.java)
-        val caps = manager.activeNetwork?.let { manager.getNetworkCapabilities(it) } ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+    /** True when [url] points at the `adb reverse` loopback base, not the configured server. */
+    private fun isUsbBase(url: HttpUrl): Boolean {
+        val base = usbUrl.toHttpUrlOrNull() ?: return false
+        return url.host == base.host && url.port == base.port
     }
 
     private suspend fun execute(request: Request): Response = suspendCancellableCoroutine { cont ->
@@ -281,11 +296,16 @@ class OffloadClient(context: Context) {
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 if (!cont.isActive) return
+                val url = call.request().url
                 val failure = when {
                     call.isCanceled() -> OffloadException("Upload cancelled.")
-                    call.request().url.host == USB_HOST -> OffloadException(NO_ROUTE)
-                    else -> e
+                    isUsbBase(url) -> OffloadException(NO_ROUTE)
+                    else -> OffloadException(
+                        "Desktop server is not reachable at ${url.host}. Check that the server and its tunnel are running.",
+                        code = SERVER_UNREACHABLE,
+                    )
                 }
+                Log.w(TAG, "${call.request().method} ${url.encodedPath} failed: ${e.javaClass.simpleName} ${failure.code ?: "no_code"}")
                 cont.resumeWithException(failure)
             }
             override fun onResponse(call: Call, response: Response) {
@@ -299,10 +319,27 @@ class OffloadClient(context: Context) {
         if (code == 401) return OffloadException(UNPAIRED, code = "unauthorized")
         val json = runCatching { JSONObject(body) }.getOrNull()
         val machine = json?.optString("error")?.takeIf { it.isNotBlank() }
+        // A 5xx/52x/530 whose body is not the server's JSON error shape is an intermediary
+        // answering (e.g. Cloudflare's text/plain "error code: 1033"), not the server itself.
+        if (code >= 500 && machine == null) {
+            return OffloadException(
+                "Desktop server is not reachable (HTTP $code). Check that the server and its tunnel are running.",
+                code = SERVER_UNREACHABLE,
+            )
+        }
         val message = json?.optString("message")?.takeIf { it.isNotBlank() } ?: machine ?: fallback
         val jobId = json?.optString("jobId")?.takeIf { it.isNotBlank() }
         val received = if (json?.has("received") == true && !json.isNull("received")) json.optLong("received") else null
-        return OffloadException(message, code = machine, jobId = jobId, received = received)
+        val files = json?.optJSONArray("files")?.let { array ->
+            List(array.length()) { index -> array.optString(index) }.filter { FILE_NAME.matches(it) }
+        }
+        return OffloadException(message, code = machine, jobId = jobId, received = received, files = files)
+    }
+
+    /** One debug log line per failed request: method, path, status, machine code — never the token. */
+    private fun OffloadException.logged(request: Request, status: Int): OffloadException {
+        Log.w(TAG, "${request.method} ${request.url.encodedPath} failed: HTTP $status ${code ?: "no_code"}")
+        return this
     }
 
     private fun parseObject(text: String): JSONObject =
@@ -318,17 +355,27 @@ class OffloadClient(context: Context) {
 
     companion object {
         const val MAX_CHUNK = 64L * 1024 * 1024
+        const val SERVER_UNREACHABLE = "server_unreachable"
         /** Device-side port the desktop server reverse-forwards (`adb reverse tcp:8765 tcp:<listen_port>`). */
         private const val USB_HOST = "127.0.0.1"
         private const val USB_URL = "http://$USB_HOST:8765"
         private const val UNPAIRED = "Not paired or token revoked. Pair again in Settings."
         const val NO_ROUTE = "No internet. Turn Wi-Fi on, or plug into the desktop with USB mode on."
+        private const val TAG = "R1CORD/Sync"
+        private val FILE_NAME = Regex("^[A-Za-z0-9._-]+$")
         private val JSON = "application/json; charset=utf-8".toMediaType()
         private val OCTET = "application/octet-stream".toMediaType()
         private val EMPTY: RequestBody = object : RequestBody() {
             override fun contentType() = null
             override fun contentLength() = 0L
             override fun writeTo(sink: BufferedSink) {}
+        }
+
+        private fun validatedNetwork(context: Context): Boolean {
+            val manager = context.getSystemService(ConnectivityManager::class.java)
+            val caps = manager.activeNetwork?.let { manager.getNetworkCapabilities(it) } ?: return false
+            return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
         }
     }
 }

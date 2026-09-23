@@ -2,6 +2,7 @@ package com.chippwalters.r1cord.sync
 
 import android.content.Context
 import android.net.Uri
+import com.chippwalters.r1cord.storage.OffloadBundle
 import com.chippwalters.r1cord.storage.RecordingLibrary
 import java.io.InputStream
 import java.security.MessageDigest
@@ -20,13 +21,36 @@ data class UploadProgress(
 
 data class SendResult(val recordingId: String, val webdavUrl: String?)
 
-class UploadCoordinator(
-    context: Context,
-    private val library: RecordingLibrary,
+/** The recording-store operations the upload flow needs, so tests can substitute a fake. */
+internal interface LibraryOps {
+    suspend fun exportBundle(id: String): OffloadBundle
+    suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, sentAt: Long?)
+    suspend fun updateJobStatus(id: String, status: String, url: String?)
+}
+
+private class RecordingLibraryOps(private val library: RecordingLibrary) : LibraryOps {
+    override suspend fun exportBundle(id: String): OffloadBundle = library.exportBundle(id)
+    override suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, sentAt: Long?) =
+        library.updateJob(id, jobId, status, url, sentAt)
+    override suspend fun updateJobStatus(id: String, status: String, url: String?) =
+        library.updateJobStatus(id, status, url)
+}
+
+class UploadCoordinator internal constructor(
+    private val library: LibraryOps,
     private val client: OffloadClient,
+    private val maxChunk: Long = OffloadClient.MAX_CHUNK,
+    private val openStream: (Uri) -> InputStream?,
 ) {
-    private val context = context.applicationContext
-    private val resolver = this.context.contentResolver
+    constructor(context: Context, library: RecordingLibrary, client: OffloadClient) : this(
+        library = RecordingLibraryOps(library),
+        client = client,
+        openStream = { uri -> context.applicationContext.contentResolver.openInputStream(uri) },
+    )
+
+    init {
+        require(maxChunk in 1..OffloadClient.MAX_CHUNK) { "Upload chunk size must be between 1 byte and 64 MiB." }
+    }
 
     suspend fun send(
         recordingId: String,
@@ -61,37 +85,27 @@ class UploadCoordinator(
             )
             createdJob = true
             library.updateJob(bundle.id, created.jobId, "sending", created.webdavUrl, null)
-            var overall = 0L
-            files.forEachIndexed { index, file ->
-                coroutineContext.ensureActive()
-                var received = client.received(created.jobId, file.name).coerceIn(0L, file.size)
-                overall = files.take(index).sumOf { it.size } + received
-                report(recordingId, index, files.size, overall, totalBytes, onProgress)
-                while (received < file.size) {
-                    coroutineContext.ensureActive()
-                    val chunk = minOf(OffloadClient.MAX_CHUNK, file.size - received)
-                    val sent = try {
-                        client.putChunk(created.jobId, file.name, received, {
-                            openAt(file.uri, received)
-                        }, chunk)
-                    } catch (error: OffloadException) {
-                        if (error.code == "offset_mismatch" && error.received != null) {
-                            received = error.received.coerceIn(0L, file.size)
-                            overall = files.take(index).sumOf { it.size } + received
-                            report(recordingId, index, files.size, overall, totalBytes, onProgress)
-                            continue
-                        }
+            // A 422 hash_mismatch at commit means the server deleted the corrupt partials, so the
+            // files it names must be streamed again from offset 0 before the next commit attempt.
+            var restart: Set<String>? = null
+            var committed: JobCreated? = null
+            var attempt = 0
+            while (committed == null) {
+                check(++attempt <= MAX_COMMIT_ATTEMPTS) { "Upload kept failing server verification." }
+                uploadFiles(created.jobId, recordingId, files, restart, totalBytes, onProgress)
+                onProgress(UploadProgress(recordingId, files.size.coerceAtLeast(1), files.size.coerceAtLeast(1), totalBytes, totalBytes, "Finishing…"))
+                try {
+                    committed = client.commit(created.jobId)
+                } catch (error: OffloadException) {
+                    if (error.code == "hash_mismatch" && attempt < MAX_COMMIT_ATTEMPTS) {
+                        restart = error.files?.toSet()?.takeIf { it.isNotEmpty() }
+                            ?: files.map { it.name }.toSet()
+                    } else {
                         throw error
                     }
-                    received = sent.coerceIn(received, file.size)
-                    overall = files.take(index).sumOf { it.size } + received
-                    report(recordingId, index, files.size, overall, totalBytes, onProgress)
                 }
-                overall = files.take(index + 1).sumOf { it.size }
             }
-            onProgress(UploadProgress(recordingId, files.size.coerceAtLeast(1), files.size.coerceAtLeast(1), totalBytes, totalBytes, "Finishing…"))
-            val committed = client.commit(created.jobId)
-            val url = committed.webdavUrl ?: created.webdavUrl
+            val url = committed?.webdavUrl ?: created.webdavUrl
             library.updateJob(bundle.id, created.jobId, "processing", url, System.currentTimeMillis())
             return SendResult(bundle.id, url)
         } catch (error: Throwable) {
@@ -101,10 +115,52 @@ class UploadCoordinator(
         }
     }
 
+    private suspend fun uploadFiles(
+        jobId: String,
+        recordingId: String,
+        files: List<HashedFile>,
+        restart: Set<String>?,
+        totalBytes: Long,
+        onProgress: (UploadProgress) -> Unit,
+    ) {
+        var overall = 0L
+        files.forEachIndexed { index, file ->
+            coroutineContext.ensureActive()
+            var received = if (restart != null && file.name in restart) {
+                0L
+            } else {
+                client.received(jobId, file.name).coerceIn(0L, file.size)
+            }
+            overall = files.take(index).sumOf { it.size } + received
+            report(recordingId, index, files.size, overall, totalBytes, onProgress)
+            while (received < file.size) {
+                coroutineContext.ensureActive()
+                val chunk = minOf(maxChunk, file.size - received)
+                val sent = try {
+                    client.putChunk(jobId, file.name, received, {
+                        openAt(file.uri, received)
+                    }, chunk)
+                } catch (error: OffloadException) {
+                    if (error.code == "offset_mismatch" && error.received != null) {
+                        received = error.received.coerceIn(0L, file.size)
+                        overall = files.take(index).sumOf { it.size } + received
+                        report(recordingId, index, files.size, overall, totalBytes, onProgress)
+                        continue
+                    }
+                    throw error
+                }
+                received = sent.coerceIn(received, file.size)
+                overall = files.take(index).sumOf { it.size } + received
+                report(recordingId, index, files.size, overall, totalBytes, onProgress)
+            }
+            overall = files.take(index + 1).sumOf { it.size }
+        }
+    }
+
     private fun hashed(name: String, uri: Uri): HashedFile {
         val digest = MessageDigest.getInstance("SHA-256")
         var size = 0L
-        (resolver.openInputStream(uri) ?: throw OffloadException("Cannot read $name.")).use { input ->
+        (openStream(uri) ?: throw OffloadException("Cannot read $name.")).use { input ->
             val buffer = ByteArray(64 * 1024)
             while (true) {
                 val n = input.read(buffer)
@@ -119,7 +175,7 @@ class UploadCoordinator(
     }
 
     private fun openAt(uri: Uri, offset: Long): InputStream {
-        val input = resolver.openInputStream(uri) ?: throw OffloadException("Cannot open file for upload.")
+        val input = openStream(uri) ?: throw OffloadException("Cannot open file for upload.")
         var remaining = offset
         val buffer = ByteArray(64 * 1024)
         while (remaining > 0) {
@@ -159,4 +215,9 @@ class UploadCoordinator(
     }
 
     private data class HashedFile(val name: String, val uri: Uri, val size: Long, val sha256: String)
+
+    private companion object {
+        /** Initial commit plus one re-try after the server rejects a file's hash. */
+        const val MAX_COMMIT_ATTEMPTS = 2
+    }
 }

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import webbrowser
 from dataclasses import replace
 from pathlib import Path
 
@@ -30,6 +32,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="r1cord_server", description="R1CORD desktop offload server")
     parser.add_argument("--config", type=Path, default=None, help="path to config.toml")
     parser.add_argument("--port", type=int, default=None, help="listen port (overrides config)")
+    parser.add_argument("--no-tray", action="store_true", help="do not show the notification-area icon")
     args = parser.parse_args(argv)
 
     config = load(args.config)
@@ -42,7 +45,20 @@ def main(argv: list[str] | None = None) -> None:
     )
     # Lets the USB watcher stop the process in run_mode=plug once nothing needs it.
     app.state.request_exit = lambda: setattr(server, "should_exit", True)
-    server.run()
+    # Plugging in an adopted device brings the dashboard up on this PC.
+    dashboard = f"http://127.0.0.1:{config.listen_port}/admin"
+    app.state.open_dashboard = lambda: webbrowser.open(dashboard)
+    tray = None
+    if sys.platform == "win32" and not args.no_tray and not os.environ.get("R1CORD_NO_TRAY"):
+        from .tray import Tray
+
+        tray = Tray(app, f"http://127.0.0.1:{config.listen_port}", app.state.request_exit)
+        tray.start()
+    try:
+        server.run()
+    finally:
+        if tray is not None:
+            tray.stop()
 
 
 if __name__ == "__main__":

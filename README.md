@@ -100,7 +100,8 @@ Details, settings and the Wi-Fi alternative are in the
 [user guide](docs/user-guide.md#using-the-desktop-companion); the server's own
 [README](server/README.md) covers configuration and internals.
 
-Tests: `server\.venv\Scripts\python.exe -m pytest -q` (35 tests, no GPU or device needed).
+Tests (no GPU or device needed): `server\.venv\Scripts\python.exe -m pytest -q` (245 companion tests) and
+`.\gradlew.bat :app:testDebugUnitTest` (95 app tests on the JVM, Robolectric).
 
 ## Design notes
 

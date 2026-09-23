@@ -14,6 +14,14 @@ _basic = HTTPBasic(realm="r1cord-admin", auto_error=False)
 _PROXY_HEADERS = ("cf-connecting-ip", "x-forwarded-for", "x-real-ip")
 
 
+def _deny(message: str) -> HTTPException:
+    # Logged once, with the reason, by the app's HTTPException handler.
+    return HTTPException(
+        status_code=401,
+        detail={"error": "unauthorized", "message": message},
+    )
+
+
 def is_local_direct(request: Request) -> bool:
     """True for a request that arrived on the loopback listener without passing through a proxy.
 
@@ -30,24 +38,15 @@ def is_local_direct(request: Request) -> bool:
 def require_token(request: Request) -> str:
     header = request.headers.get("authorization")
     if not header:
-        raise HTTPException(
-            status_code=401,
-            detail={"error": "unauthorized", "message": "missing bearer token"},
-        )
+        raise _deny("missing bearer token")
     parts = header.split(None, 1)
     if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
-        raise HTTPException(
-            status_code=401,
-            detail={"error": "unauthorized", "message": "missing bearer token"},
-        )
+        raise _deny("missing bearer token")
     raw = parts[1].strip()
     if not request.app.state.store.token_valid(raw):
         # Touch the digest so a missing token still does a compare.
         hmac.compare_digest(hash_token(raw), "0" * 64)
-        raise HTTPException(
-            status_code=401,
-            detail={"error": "unauthorized", "message": "invalid bearer token"},
-        )
+        raise _deny("invalid bearer token")
     return raw
 
 

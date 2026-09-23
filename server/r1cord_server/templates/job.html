@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}Job {{ job_id }} — r1cord-server{% endblock %}
 {% block body %}
+{% if notice %}<p class="error">{{ notice }}</p>{% endif %}
+{% if sent %}<p class="ok">Emailed to {{ sent }}.</p>{% endif %}
 {% if not job %}
 <h1>Unknown job</h1>
 <p class="muted">{{ job_id }}</p>
@@ -8,7 +10,6 @@
 <h1>{{ job.title }}</h1>
 <p class="muted">{{ job.job_id }} · {{ job.recording_id }} · {{ job.status }}</p>
 
-{% if notice %}<p class="error">{{ notice }}</p>{% endif %}
 {% if job.error %}<p class="error">{{ job.error }}</p>{% endif %}
 
 <section class="card">
@@ -49,6 +50,14 @@
     <li class="muted">None yet.</li>
     {% endfor %}
   </ul>
+</section>
+
+<section class="card">
+  <h2>Email</h2>
+  <form method="post" action="/admin/jobs/{{ job.job_id }}/email">
+    <button type="submit" {% if not config.email_to %}disabled{% endif %}>Email summary</button>
+    <span class="muted">{% if config.email_to %}to {{ config.email_to }}{% else %}Set email_to on the <a href="/admin/config">Config</a> page first.{% endif %}</span>
+  </form>
 </section>
 
 <section class="card">

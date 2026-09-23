@@ -21,6 +21,24 @@ from .usb import UsbWatcher
 from .worker import Worker
 
 PACKAGE_DIR = Path(__file__).resolve().parent
+log = logging.getLogger("r1cord_server.app")
+
+
+def _log_handled(request: Request, status_code: int, code: str, detail: str = "") -> None:
+    """One line per handled error: method, path (no query string), status, machine code, and the
+    error body's message when it names the reason (e.g. "missing bearer token").
+
+    4xx are expected client mistakes (INFO); 5xx are ours (WARNING). Never header values.
+    """
+    log.log(
+        logging.WARNING if status_code >= 500 else logging.INFO,
+        "%s %s -> %s %s%s",
+        request.method,
+        request.url.path,
+        status_code,
+        code,
+        f" | {detail}" if detail else "",
+    )
 
 
 def _setup_logging(config: Config) -> None:
@@ -43,6 +61,7 @@ def create_app(config: Config, config_path: Path | None = None) -> FastAPI:
         lambda: app.state.config,
         request_exit=lambda: app.state.request_exit(),
         last_activity=lambda: app.state.last_activity,
+        open_dashboard=lambda: app.state.open_dashboard(),
     )
     _setup_logging(config)
 
@@ -67,6 +86,7 @@ def create_app(config: Config, config_path: Path | None = None) -> FastAPI:
     app.state.last_activity = time.monotonic()
     # __main__ replaces this with uvicorn's should_exit; under an embedded/test app it is a no-op.
     app.state.request_exit = lambda: None
+    app.state.open_dashboard = lambda: None
 
     app.include_router(api_router, prefix="/v1")
     app.include_router(admin_router)
@@ -84,28 +104,31 @@ def create_app(config: Config, config_path: Path | None = None) -> FastAPI:
         return response
 
     @app.exception_handler(RequestValidationError)
-    async def validation_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         parts: list[str] = []
         for err in exc.errors():
             loc = ".".join(str(x) for x in err.get("loc", ()) if x != "body")
             msg = str(err.get("msg", "invalid"))
             parts.append(f"{loc}: {msg}" if loc else msg)
         message = "; ".join(parts) or "invalid request"
+        _log_handled(request, 422, "invalid_request")
         return JSONResponse(
             status_code=422,
             content={"error": "invalid_request", "message": message},
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def http_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    async def http_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         headers = dict(exc.headers) if exc.headers else None
         if isinstance(exc.detail, dict) and "error" in exc.detail:
             body = dict(exc.detail)
             body.setdefault("message", "")
+            _log_handled(request, exc.status_code, str(body["error"]))
             return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
         code = "unauthorized" if exc.status_code == 401 else "http_error"
         if exc.status_code == 404:
             code = "not_found"
+        _log_handled(request, exc.status_code, code)
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": code, "message": str(exc.detail)},
@@ -113,13 +136,15 @@ def create_app(config: Config, config_path: Path | None = None) -> FastAPI:
         )
 
     @app.exception_handler(HTTPException)
-    async def fastapi_http_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+    async def fastapi_http_handler(request: Request, exc: HTTPException) -> JSONResponse:
         headers = dict(exc.headers) if exc.headers else None
         if isinstance(exc.detail, dict) and "error" in exc.detail:
             body = dict(exc.detail)
             body.setdefault("message", "")
+            _log_handled(request, exc.status_code, str(body["error"]), str(body["message"]))
             return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
         code = "unauthorized" if exc.status_code == 401 else "http_error"
+        _log_handled(request, exc.status_code, code)
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": code, "message": str(exc.detail)},

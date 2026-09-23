@@ -33,7 +33,7 @@ There is no app store on this device, so the app is installed over USB from your
 4. In the platform-tools folder, run:
 
    ```text
-   adb install R1CORD-0.3.1.apk
+   adb install R1CORD-0.3.2.apk
    ```
 
    It should print `Success`. If it says `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, an older R1CORD is on the device that was signed differently — `adb uninstall com.chippwalters.r1cord` first. That clears the app's list of recordings, though the recording files themselves stay on the device.
@@ -47,7 +47,7 @@ To update later, run the same command with `-r` added (`adb install -r R1CORD-<v
 `SHA256SUMS.txt` in the download folder lists a fingerprint for each file, so you can confirm yours arrived intact. In PowerShell:
 
 ```text
-Get-FileHash .\R1CORD-0.3.1.apk -Algorithm SHA256
+Get-FileHash .\R1CORD-0.3.2.apk -Algorithm SHA256
 ```
 
 Compare the result with the matching line in `SHA256SUMS.txt`; they should be identical apart from upper/lower case.
@@ -105,7 +105,7 @@ Press the **gear** on the home screen. Settings cannot be opened while a recordi
 
 **Use WAV** — records uncompressed studio-quality audio instead of the normal compressed format. Files are about 7.4 times larger (roughly 346 MB per hour instead of 40 MB), so the remaining-time figure drops accordingly. Leave this off unless you specifically need it.
 
-**Desktop server** — for the optional computer companion: the server address, **Pair** / **Unpair**, and defaults for what should happen to a recording you send. Only needed if you use the Wi-Fi sending feature.
+**Desktop server** — for the optional computer companion: the **Server URL**, **Pair** / **Unpair**, and defaults for what should happen to a recording you send. The Server URL is the address your PC answers on over the internet or your Wi-Fi network; it is what **SEND** uses whenever the R1 has a working connection. Over the USB cable R1CORD finds the companion by itself, so there is nothing to set for that.
 
 **Home app** — lets you choose a different home screen for the device.
 
@@ -121,7 +121,22 @@ Open **LIBRARY** and tap a recording. You get:
 - **PLAY** / **PAUSE**,
 - **−10** and **+10** to jump ten seconds,
 - any photos you attached,
-- **SEND**, **DELETE** and **DONE**.
+- **SEND**, **DELETE** and **DONE**,
+- **OPEN SUMMARY**, once the desktop companion has published a summary for it.
+
+**OPEN SUMMARY** shows the page inside R1CORD. The **OPEN** button in the "Sent" message and the notification that follows a send open the same view.
+
+![Recording detail with the OPEN SUMMARY button](images/5c1e9a07/detail_open_summary.svg)
+
+1. **OPEN SUMMARY** — appears once the desktop companion has published a summary for this recording.
+
+![A published summary open in R1CORD's viewer](images/5c1e9a07/summary_viewer.svg)
+
+1. **Close** — back to the recording. The R1's Back gesture steps back through any links you followed first, then closes.
+2. **Title** — the page's own title.
+3. **Reload** — fetch the page again, for example after the companion republished it.
+
+If the page cannot be loaded — no connection, or the summary is not published yet — the viewer says so and offers **RETRY**.
 
 Nothing plays until you press PLAY — selecting a recording, or stopping one, never starts playback by itself.
 
@@ -191,7 +206,7 @@ Nothing is ever copied from a device you have not adopted. That is what stops th
 
 ### What happens after that
 
-Every time the R1 is plugged in, each finished recording is copied to the PC and transcribed. Recordings still in progress are left alone until you press Stop. A recording is never processed twice, and **nothing is ever deleted from the R1** — the companion only reads.
+Every time the R1 is plugged in, the admin page opens on your PC and each finished recording is copied across and transcribed. Recordings still in progress are left alone until you press Stop. A recording is never processed twice, and **nothing is ever deleted from the R1** — the companion only reads.
 
 Watch progress on the admin page. Your recordings, transcripts and a log of each job are in:
 
@@ -199,7 +214,37 @@ Watch progress on the admin page. Your recordings, transcripts and a log of each
 C:\Users\<you>\AppData\Local\R1CORD\data
 ```
 
-with each recording in its own folder: the audio, any photos, and `transcript.txt`.
+with each recording in its own folder: the audio, any photos, and `transcript.txt`. The dashboard's **Recent jobs** list gives you each recording's audio without digging for that folder:
+
+![Recent jobs on the companion's admin page](images/5c1e9a07/recent_jobs.svg)
+
+1. **Size** — how big the recording's audio file is.
+2. **Play** — opens the audio in your PC's usual media player.
+3. **Download** — saves a copy through the browser.
+4. **Folder** — opens the folder that holds it, with the file selected.
+
+Play and Folder act on the PC itself, so they only appear when the admin page is open on that PC.
+
+### The R1CORD icon in the taskbar
+
+While the companion is running, the R1CORD logo sits in the notification area at the right-hand end of the taskbar. Hover over it for a one-line status; click it to open the admin page; right-click it for this menu:
+
+![The companion's taskbar icon and its menu](images/5c1e9a07/tray_menu.svg)
+
+1. **Status** — whether the R1 is connected, and what the companion is doing (*Idle*, or the job it is working on).
+2. **Open dashboard** — the admin page. **Devices** and **Config** open those tabs.
+3. **USB mode** and **Email finished jobs** — on/off switches; a tick means on. Email stays greyed out until an address is set on the Config tab.
+4. **Open recordings folder** — and **Open logs folder** below it, for when something needs looking into.
+5. **Quit R1CORD Server** — stops the companion until you start it again.
+6. **The icon** — the R1CORD logomark.
+
+When a job finishes, Windows shows a short notification: *Summary ready*, *Transcript ready* or *Job failed*.
+
+Windows 11 hides new icons behind the **^** arrow at first. To keep R1CORD's in view, drag it from there onto the taskbar.
+
+### Getting each summary by email
+
+If the PC has Google's `gws` command-line tool installed and signed in to your Gmail, the companion can email you each finished job: the summary (or the transcript, for a transcribe-only job), plus a link to the published page. On the admin page's **Config** tab, fill in **email_to** and tick **email_enabled**; the **Email summary** button on any job's page sends one by hand. Email is off until you turn it on.
 
 ### Settings worth knowing
 
@@ -208,13 +253,14 @@ On the admin page's **Config** tab:
 - **What to do with new recordings** (`usb_auto_action`) — `transcribe` is the default. `archive` copies files without transcribing.
 - **Speech model** (`asr_model`) — the default is the most accurate one and downloads about 1.6 GB the first time it runs. If transcription is too slow on your PC, choose `small` or `medium`.
 - **Where recordings are kept** (`datastore`) — point this at a drive with room if you record a lot.
-- **When the program runs** (`run_mode`) — by default it starts when you start it and shuts itself down about ten minutes after you unplug, so nothing sits running in the background. Set it to `always` if you would rather it stay on.
+- **When the program runs** (`run_mode`) — by default it starts when you start it and shuts itself down about ten minutes after you unplug, so nothing sits running in the background. Set it to `always` if you would rather it stay on — you will want that if you send over Wi-Fi from elsewhere.
+- **Email** (`email_enabled`, `email_to`) — see [Getting each summary by email](#getting-each-summary-by-email).
 
 Two further features exist for people who have the extra pieces: written **summaries** (needs a coding-assistant CLI installed and signed in on the PC) and **publishing** a formatted page (needs the MD DOCS app). Both are off unless you configure them, and neither is needed for transcripts.
 
 ### Sending over Wi-Fi instead
 
-If you would rather not plug in, the R1 can upload over your network. On the admin page click **Generate pairing code**; on the R1, Settings → Desktop server, enter your PC's address and the six-digit code. After that, **SEND** on any recording uploads it. This needs the PC reachable from the R1 — the same Wi-Fi network, or your own remote-access setup.
+If you would rather not plug in, the R1 can upload over your network. On the admin page click **Generate pairing code**; on the R1, Settings → Desktop server, enter your PC's address as the **Server URL** and the six-digit code. After that, **SEND** on any recording uploads it. This needs the PC reachable from the R1 — the same Wi-Fi network, or your own remote-access setup (a tunnel to the PC works from anywhere, as long as the PC, the companion and the tunnel are all running). With no working connection at all, SEND goes over the USB cable instead, when the R1 is plugged into the PC.
 
 ## Turning the R1 off, and reaching Android settings
 
@@ -248,8 +294,10 @@ Nothing leaves the R1 unless you send it or copy it. R1CORD has no cloud account
 | A recording says INTERRUPTED | It was cut short — battery, or the app closing. Whatever was captured is still there. |
 | "Stop recording before opening settings." | Press STOP first. Settings, sending and power off all wait for the recording to finish. |
 | "No internet. Turn Wi-Fi on, or plug into the desktop with USB mode on." | Sending found no connection. Swipe down from the top and turn Wi-Fi on, or plug into the computer running the desktop server. |
+| "Desktop server is not reachable (HTTP 530)…" or "…not reachable at *your server*…" | The R1 has a connection but nothing answered at your Server URL: the PC is off or asleep, the companion is not running, or your tunnel to it is down. Start them and send again — the upload picks up where it stopped. |
 | "Pair with the desktop server in Settings first." | The R1 has not been paired yet. Settings → Desktop server → Pair, using the code your server shows. |
 | "Not paired or token revoked. Pair again in Settings." | The server no longer recognises this R1. Pair again. |
 | Status stays on PROCESSING | Your computer has not finished the job. Press REFRESH again; if it never changes, check the server on your computer. |
 | Plugged in, but nothing happens | On the computer: the R1 has to be approved once in the server's Devices page. On the R1: USB debugging must be on. |
+| No R1CORD icon in the taskbar | Click the **^** arrow next to the clock — Windows hides new icons there. If it is not there either, the companion is not running: start it from the Start menu. |
 | The screen dims while recording | Normal after about 30 seconds. Touch it to brighten. |

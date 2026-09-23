@@ -35,7 +35,25 @@ The first transcription downloads the Whisper model (`large-v3-turbo`, ~1.6 GB) 
 
 **Start-menu → R1CORD Server**, or double-click `start-server.bat`: starts the server hidden if it is not already running, waits for it to answer, opens `http://127.0.0.1:<port>/admin`. Set `R1CORD_NO_BROWSER=1` to start without opening a page.
 
-By hand: `.venv\Scripts\python.exe -m r1cord_server` (flags: `--config PATH`, `--port N`; env `R1CORD_SERVER_CONFIG` also selects the TOML).
+While the server is running, plugging in an adopted device opens the admin dashboard in the default browser. A device that was already connected when the server started does not open one (`start-server.bat` already has), and neither does adopting a device that is already on the cable.
+
+By hand: `.venv\Scripts\python.exe -m r1cord_server` (flags: `--config PATH`, `--port N`, `--no-tray`; env `R1CORD_SERVER_CONFIG` also selects the TOML).
+
+### Notification-area (systray) icon
+
+While the server runs on Windows it shows the R1CORD logomark in the notification area. Hover for a one-line status (device, current job); left-click opens the dashboard; right-click for the menu:
+
+| Item | Does |
+|---|---|
+| *R1CORD Server* / device line / job line | Status only: `Rabbit R1 connected`, `No device connected`, `USB mode off`; `Idle`, `3 queued`, `Transcribing: <title>` |
+| **Open dashboard** (also a left-click on the icon) | `/admin` in the default browser |
+| **Devices**, **Config** | Those admin pages |
+| **USB mode** | On/off switch, same as the dashboard button; saved to `config.toml` |
+| **Email finished jobs** | On/off switch for `email_enabled`; greyed out until `email_to` is set |
+| **Open recordings folder** / **Open logs folder** | `<datastore>\inbox` / `<datastore>\logs` in Explorer |
+| **Quit R1CORD Server** | Stops the server. In `run_mode = always` it starts again at the next logon; otherwise use `start-server.bat` |
+
+When a job finishes the icon shows a Windows notification: *Summary ready*, *Transcript ready* or *Job failed* with the recording title. Windows 11 puts new tray icons in the hidden-icons overflow (`^`); to keep it on the taskbar, drag it out of the overflow or turn it on under **Settings → Personalization → Taskbar → Other system tray icons** (listed as *Python* / *pythonw*, because the server runs under `pythonw.exe`). `--no-tray` or `R1CORD_NO_TRAY=1` starts the server without the icon.
 
 **Login:** none when you open the admin page on this PC. The HTTP Basic password (`admin` / `admin_password`, shown on the Config page) is only asked for when the page is reached through a tunnel or proxy (`CF-Connecting-IP` / `X-Forwarded-For` present).
 
@@ -84,6 +102,14 @@ Turn USB mode off (dashboard button or `usb_enabled`) before any mtkclient / fas
 3. The device stores a bearer token. Every `/v1` route except `POST /v1/pair` requires `Authorization: Bearer <token>`.
 4. Revoke a token from the dashboard if the device is lost.
 
+## Recordings on the dashboard
+
+**Recent jobs** shows each recording's audio size and three buttons: **Play** opens the audio in this PC's default media player, **Download** saves it through the browser, **Folder** opens Explorer with the file selected (`<datastore>\inbox\<recordingId>\`). Play and Folder act on this PC's desktop, so they appear, and work, only when the admin page is opened on this PC; through a tunnel or proxy only Download is offered (and the other two routes answer `403`).
+
+## Email
+
+With `email_enabled` on, every job that finishes (`complete`) is emailed to `email_to`: subject = recording title, body = the summary (or the transcript when the job was transcribe-only), then the published page link and the job page link. It is sent through the Google Workspace CLI (`gws`) from the Gmail account it is signed in with (`gws auth login`); the server calls the native `gws.exe` behind the npm shim so long messages are not cut by `cmd.exe`. A failed send is written to the job log and never changes the job's status. **Email summary** on a job page sends (or resends) it by hand.
+
 ## Config keys
 
 Stored in `%LOCALAPPDATA%\R1CORD\config.toml`. The admin form edits every field except `datastore`. Host/port changes take effect on restart.
@@ -112,6 +138,9 @@ Stored in `%LOCALAPPDATA%\R1CORD\config.toml`. The admin form edits every field 
 | `usb_device_root` | `/sdcard/Download/R1CORD` |
 | `run_mode` | `plug` (`always`) |
 | `idle_exit_min` | `10` — plug mode only |
+| `email_enabled` | `false` |
+| `email_to` | empty (nothing is sent until set) |
+| `gws_cmd` | `gws` |
 
 Adopted device serials live in `index.sqlite` (`devices` table), not in the TOML; use the Devices page.
 
