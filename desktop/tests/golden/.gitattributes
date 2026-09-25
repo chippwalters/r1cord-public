@@ -1,0 +1,3 @@
+# Golden output is compared byte for byte (the renderer writes LF; asset names are content hashes),
+# so checkout must not convert line endings.
+** -text

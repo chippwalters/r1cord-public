@@ -1,0 +1,686 @@
+/**
+ * @name High Contrast
+ * @background #FFFFFF
+ * @text #000000
+ * @layout toc
+ *
+ * A reading theme for low vision, on the sidebar-and-card shell the
+ * Altuit-TOC family uses (Contents panel on the left, document on the
+ * right, Toggle Theme in the header).
+ *
+ * Every piece of text is pure black (#000000) on pure white (#FFFFFF), the
+ * maximum contrast ratio (21:1, WCAG AAA). Nothing is grey, nothing is
+ * tinted, nothing depends on colour alone: links are underlined, quotes
+ * carry a heavy rule, code sits inside a solid border. Toggle Theme flips
+ * the whole page to white on black for readers who prefer it.
+ *
+ * Type is large and open: 20px body, line-height 1.7, extra letter, word
+ * and paragraph spacing (WCAG 1.4.12 text-spacing), a hyperlegible sans
+ * (Atkinson Hyperlegible, then Verdana) and no italics for emphasis. Lines
+ * are capped at about 70 characters so the eye can find the next one.
+ *
+ * Keyboard focus is a thick ring; hovered or focused links invert.
+ *
+ * Optional in-document tags (stripped from the exported output):
+ *   [theme:dark]    — export opens white on black instead of black on white.
+ *   [brand-header]  — CHIPPWALTERS logo plus a Back button in the header.
+ *   [home-header]   — a Home button linking to the site's index.html.
+ *   [backlot-header] — a numbered rail of stages in the header (from
+ *                     backlot.json beside the page), live choices in the body
+ *                     (- [ ] checks, - ( ) picks, [backlot-decision],
+ *                     [backlot-note]) and a Save answers button.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap');
+
+/* ============================================
+   Variables — two palettes, both pure
+   ============================================ */
+:root {
+  --content-w: 840px;
+  --sidebar-w: 300px;
+  --font-body: 'Atkinson Hyperlegible', Verdana, 'Segoe UI', Arial, Helvetica, sans-serif;
+  --font-mono: Consolas, 'Courier New', 'Liberation Mono', monospace;
+  --mark-bg: #FFFF00;
+  --mark-fg: #000000;
+}
+
+/* Black on white — the default, for export and the in-app preview */
+[data-theme="light"],
+.theme-high-contrast {
+  --bg: #FFFFFF;
+  --fg: #000000;
+}
+
+/* White on black — Toggle Theme */
+[data-theme="dark"] {
+  --bg: #000000;
+  --fg: #FFFFFF;
+}
+
+/* ============================================
+   Base
+   ============================================ */
+html {
+  height: 100%;
+  scroll-padding-top: 90px;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: var(--font-body);
+  font-size: 20px;
+  line-height: 1.7;
+  letter-spacing: 0.02em;
+  word-spacing: 0.08em;
+  -webkit-font-smoothing: auto;
+  text-rendering: optimizeLegibility;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+* { box-sizing: border-box; }
+
+a {
+  color: var(--fg);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 0.12em;
+  text-underline-offset: 0.18em;
+}
+a:hover,
+a:focus {
+  background: var(--fg);
+  color: var(--bg);
+  text-decoration: none;
+  outline: none;
+}
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 4px solid var(--fg);
+  outline-offset: 3px;
+}
+
+strong, b { font-weight: 700; }
+
+/* Italics are hard to read at low vision; render emphasis as bold instead. */
+em, i { font-style: normal; font-weight: 700; }
+
+::selection { background: var(--fg); color: var(--bg); }
+
+/* Scrollbars: solid, two-tone */
+::-webkit-scrollbar { width: 14px; height: 14px; }
+::-webkit-scrollbar-track { background: var(--bg); border-left: 2px solid var(--fg); }
+::-webkit-scrollbar-thumb { background: var(--fg); border: 3px solid var(--bg); }
+* { scrollbar-width: auto; scrollbar-color: var(--fg) var(--bg); }
+
+/* ============================================
+   Headings
+   ============================================ */
+.theme-high-contrast h1, .theme-high-contrast h2, .theme-high-contrast h3,
+.theme-high-contrast h4, .theme-high-contrast h5, .theme-high-contrast h6,
+h1, h2, h3, h4, h5, h6 {
+  color: var(--fg);
+  font-weight: 700;
+  line-height: 1.25;
+  margin-top: 1.6em;
+  margin-bottom: 0.6em;
+  letter-spacing: 0.01em;
+}
+.theme-high-contrast h1, h1 { font-size: 2.2em; border-bottom: 4px solid var(--fg); padding-bottom: 0.25em; }
+.theme-high-contrast h2, h2 { font-size: 1.7em; border-bottom: 2px solid var(--fg); padding-bottom: 0.25em; }
+.theme-high-contrast h3, h3 { font-size: 1.4em; }
+.theme-high-contrast h4, h4 { font-size: 1.2em; }
+.theme-high-contrast h5, h5 { font-size: 1.1em; }
+.theme-high-contrast h6, h6 { font-size: 1em; text-decoration: underline; text-underline-offset: 0.2em; }
+
+/* ============================================
+   Header
+   ============================================ */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--bg);
+  border-bottom: 4px solid var(--fg);
+}
+.header-inner {
+  max-width: calc(var(--content-w) + var(--sidebar-w) + 64px);
+  margin: 0 auto;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+.brand {
+  font-size: 22px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  color: var(--fg);
+}
+.spacer { flex: 1; }
+
+/* Brand logo (opt-in via the [brand-header] tag). The wordmark uses
+   currentColor; the cube keeps its own colour. */
+.brand-logo,
+.brand-logo:hover,
+.brand-logo:focus {
+  color: var(--fg);
+  background: transparent;
+  text-decoration: none;
+  gap: 0;
+}
+.brand-logo svg {
+  height: 34px;
+  width: auto;
+  display: block;
+}
+
+/* ============================================
+   Buttons — solid outline, invert on hover
+   ============================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 0;
+  border: 3px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  text-decoration: none;
+  font-family: var(--font-body);
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+.btn:hover,
+.btn:focus {
+  background: var(--fg);
+  color: var(--bg);
+  text-decoration: none;
+}
+
+/* ============================================
+   Layout — sidebar + content
+   ============================================ */
+.layout {
+  max-width: calc(var(--content-w) + var(--sidebar-w) + 64px);
+  margin: 24px auto;
+  padding: 0 16px;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+}
+
+/* ============================================
+   Contents sidebar
+   ============================================ */
+nav.toc {
+  position: sticky;
+  top: 96px;
+  align-self: start;
+  padding: 16px;
+  background: var(--bg);
+  border: 3px solid var(--fg);
+  border-radius: 0;
+  max-height: calc(100vh - 112px);
+  overflow-y: auto;
+  font-size: 17px;
+  line-height: 1.5;
+}
+.toc h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--fg);
+  border: none;
+}
+.toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.toc > ul > li {
+  margin: 6px 0;
+}
+.toc a {
+  color: var(--fg);
+  font-weight: 400;
+  text-decoration: none;
+  display: inline-block;
+  padding: 2px 4px;
+}
+.toc a:hover,
+.toc a:focus {
+  background: var(--fg);
+  color: var(--bg);
+  text-decoration: none;
+}
+
+/* Contents header with expand / collapse */
+.toc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid var(--fg);
+}
+.toc-controls {
+  display: flex;
+  gap: 6px;
+}
+.toc-controls button {
+  background: var(--bg);
+  border: 2px solid var(--fg);
+  color: var(--fg);
+  cursor: pointer;
+  padding: 2px 10px;
+  font-size: 18px;
+  font-weight: 700;
+  border-radius: 0;
+  line-height: 1.2;
+  font-family: var(--font-body);
+}
+.toc-controls button:hover,
+.toc-controls button:focus {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+/* Collapsible sections */
+.toc-section {
+  margin: 6px 0;
+}
+.toc-section-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 2px 0;
+}
+.toc-toggle {
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--fg);
+  flex-shrink: 0;
+}
+.toc-section.collapsed .toc-toggle {
+  transform: rotate(-90deg);
+}
+.toc-section-header a {
+  flex: 1;
+}
+.toc-children {
+  margin-left: 10px;
+  padding: 4px 0 4px 12px;
+  border-left: 3px solid var(--fg);
+  overflow: hidden;
+}
+.toc-section.collapsed .toc-children {
+  display: none;
+}
+.toc-children li {
+  margin: 4px 0;
+}
+.toc-children a {
+  font-size: 16px;
+  color: var(--fg);
+}
+
+/* Top-level entries bold, nested entries regular */
+.toc-h1 > .toc-section-header a {
+  font-weight: 700;
+}
+.toc-h2 > .toc-section-header a {
+  font-weight: 400;
+}
+
+/* ============================================
+   Content card
+   ============================================ */
+.card {
+  background: var(--bg);
+  border: 3px solid var(--fg);
+  border-radius: 0;
+  padding: 24px 32px 40px;
+}
+
+/* Keep lines short enough to track. Tables and code may run full width. */
+.doc > *, .theme-high-contrast > * {
+  max-width: 36em;
+}
+.doc > table, .doc > pre,
+.theme-high-contrast > table, .theme-high-contrast > pre {
+  max-width: 100%;
+}
+
+/* Document content — export (.doc) and in-app preview (.theme-high-contrast) */
+.doc p, .theme-high-contrast p {
+  margin: 0 0 1.5em 0;
+}
+
+.doc mark, .theme-high-contrast mark {
+  background: var(--mark-bg);
+  color: var(--mark-fg);
+  font-weight: 700;
+  padding: 0 0.15em;
+}
+
+.doc del, .doc s, .theme-high-contrast del, .theme-high-contrast s {
+  text-decoration: line-through;
+  text-decoration-thickness: 0.12em;
+}
+
+.doc sub, .doc sup, .theme-high-contrast sub, .theme-high-contrast sup {
+  font-size: 0.8em;
+}
+
+.doc hr, .theme-high-contrast hr {
+  border: none;
+  border-top: 4px solid var(--fg);
+  margin: 2.5em 0;
+}
+
+/* Lists */
+.doc ul, .theme-high-contrast ul {
+  margin: 0 0 1.5em 0;
+  padding-left: 1.6em;
+  list-style: disc outside;
+}
+.doc ol, .theme-high-contrast ol {
+  margin: 0 0 1.5em 0;
+  padding-left: 1.8em;
+  list-style: decimal outside;
+}
+.doc li, .theme-high-contrast li {
+  margin: 0.5em 0;
+  padding-left: 0.25em;
+  display: list-item;
+}
+.doc li::marker, .theme-high-contrast li::marker {
+  color: var(--fg);
+  font-weight: 700;
+}
+.doc ul ul, .doc ol ol, .doc ul ol, .doc ol ul,
+.theme-high-contrast ul ul, .theme-high-contrast ol ol,
+.theme-high-contrast ul ol, .theme-high-contrast ol ul {
+  margin-bottom: 0.5em;
+}
+
+/* Task lists — a checkbox big enough to see. */
+.doc input[type="checkbox"], .theme-high-contrast input[type="checkbox"] {
+  width: 1.1em;
+  height: 1.1em;
+  margin-right: 0.5em;
+  vertical-align: -0.15em;
+  accent-color: var(--fg);
+}
+
+/* Quotes */
+.doc blockquote, .theme-high-contrast blockquote {
+  margin: 1.5em 0;
+  padding: 0.5em 0 0.5em 1.2em;
+  border-left: 8px solid var(--fg);
+  color: var(--fg);
+  font-style: normal;
+}
+.doc blockquote p:last-child, .theme-high-contrast blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+/* Code — bordered, never tinted */
+.doc code, .doc kbd, .doc samp,
+.theme-high-contrast code, .theme-high-contrast kbd, .theme-high-contrast samp {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  color: var(--fg);
+  background: var(--bg);
+  border: 2px solid var(--fg);
+  border-radius: 0;
+  padding: 0.05em 0.35em;
+}
+.doc kbd, .theme-high-contrast kbd {
+  font-weight: 700;
+  border-bottom-width: 4px;
+}
+.doc pre, .theme-high-contrast pre {
+  margin: 1.5em 0;
+  padding: 1em 1.2em;
+  border: 3px solid var(--fg);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--fg);
+  line-height: 1.6;
+  overflow-x: auto;
+}
+.doc pre code, .theme-high-contrast pre code {
+  border: none;
+  padding: 0;
+  font-size: 0.9em;
+  background: none;
+}
+
+/* Tables */
+.doc table, .theme-high-contrast table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1.5em 0;
+  border: 3px solid var(--fg);
+}
+.doc th, .doc td, .theme-high-contrast th, .theme-high-contrast td {
+  border: 2px solid var(--fg);
+  padding: 0.6em 0.8em;
+  text-align: left;
+  vertical-align: top;
+  color: var(--fg);
+  background: var(--bg);
+}
+.doc th, .theme-high-contrast th {
+  font-weight: 700;
+  border-bottom-width: 4px;
+}
+.doc caption, .theme-high-contrast caption {
+  font-weight: 700;
+  text-align: left;
+  padding: 0.5em 0;
+}
+
+/* Images and media */
+.doc img, .theme-high-contrast img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1.5em 0;
+  border: 2px solid var(--fg);
+  border-radius: 0;
+}
+.doc td img, .doc th img,
+.theme-high-contrast td img, .theme-high-contrast th img {
+  width: auto;
+  height: auto;
+  display: inline-block;
+  margin: 0;
+}
+.doc figcaption, .theme-high-contrast figcaption {
+  font-weight: 700;
+  margin-top: -1em;
+  margin-bottom: 1.5em;
+}
+
+.youtube-embed {
+  position: relative;
+  padding-bottom: 56.25%;
+  height: 0;
+  margin: 1.5em 0;
+  overflow: hidden;
+  border: 3px solid var(--fg);
+}
+.youtube-embed iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+
+/* Details / summary */
+.doc details, .theme-high-contrast details {
+  border: 3px solid var(--fg);
+  padding: 0.6em 1em;
+  margin: 1.5em 0;
+}
+.doc summary, .theme-high-contrast summary {
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0.2em 0;
+}
+
+/* ============================================
+   Mermaid diagrams — two-tone lines and text
+   ============================================ */
+.mermaid {
+  background: var(--bg);
+  margin: 1.5em 0;
+}
+.mermaid svg text,
+.mermaid svg tspan {
+  fill: var(--fg) !important;
+  font-family: var(--font-body) !important;
+  font-weight: 700 !important;
+}
+.mermaid svg rect,
+.mermaid svg circle,
+.mermaid svg ellipse,
+.mermaid svg polygon,
+.mermaid svg path.node,
+.mermaid svg .node path,
+.mermaid svg .cluster rect {
+  fill: var(--bg) !important;
+  stroke: var(--fg) !important;
+  stroke-width: 2.5px !important;
+}
+.mermaid svg .edgePath path,
+.mermaid svg line,
+.mermaid svg .flowchart-link,
+.mermaid svg .messageLine0,
+.mermaid svg .messageLine1,
+.mermaid svg .actor-line {
+  stroke: var(--fg) !important;
+  stroke-width: 2.5px !important;
+}
+.mermaid svg marker path,
+.mermaid svg .arrowheadPath {
+  fill: var(--fg) !important;
+  stroke: var(--fg) !important;
+}
+.mermaid svg .edgeLabel,
+.mermaid svg .edgeLabel rect,
+.mermaid svg .labelBkg {
+  background: var(--bg) !important;
+  fill: var(--bg) !important;
+}
+
+/* ============================================
+   Motion
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+/* ============================================
+   Backlot — [backlot-header]: stage rail, choices, notes, save.
+   Pure black and white like everything else; the current stage and a
+   chosen item are marked by a solid border, never by colour alone.
+   ============================================ */
+.site-header:has(.bl-rail-row) ~ .layout nav.toc { top: 140px; max-height: calc(100vh - 156px); }
+html:has(.bl-rail-row) { scroll-padding-top: 136px; }
+.bl-rail-row { padding-top: 0; padding-bottom: 10px; gap: 6px 10px; }
+.bl-rail { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; }
+.bl-gate {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px;
+  border: 2px solid transparent; color: var(--fg); text-decoration: none;
+  font-family: var(--font-mono); font-size: 15px; font-weight: 700; text-transform: uppercase;
+}
+.bl-gate:hover, .bl-gate:focus { border-color: var(--fg); text-decoration: underline; }
+.bl-gate.bl-current { border-color: var(--fg); background: var(--fg); color: var(--bg); }
+.bl-dot { width: 10px; height: 10px; border: 2px solid currentColor; border-radius: 50%; flex: none; }
+.bl-dot-answered, .bl-dot-accepted { background: currentColor; }
+.bl-status { font-family: var(--font-mono); font-size: 15px; }
+.doc li.bl-item {
+  list-style: none; margin: 10px 0 10px -1.4em; padding: 12px 14px;
+  border: 2px solid var(--fg); cursor: pointer;
+}
+.doc li.bl-item:has(> input:checked) { border-width: 4px; }
+.doc li.bl-item > input.bl-input { width: 22px; height: 22px; margin: 0 12px 0 0; vertical-align: middle; accent-color: var(--fg); }
+.doc li.bl-item > p:first-of-type { display: inline; margin: 0; }
+.doc li.bl-item img { display: block; margin-top: 10px; }
+.doc ul:has(> li.bl-item img) {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; padding-left: 0;
+}
+.doc ul:has(> li.bl-item img) > li.bl-item { margin: 0; }
+.doc ul:has(> li.bl-item img) > li.bl-item img { width: 100%; }
+.doc img.bl-zoomable { cursor: zoom-in; }
+body.bl-lightbox-open { overflow: hidden; }
+.bl-lightbox {
+  position: fixed; inset: 0; z-index: 10000; display: none;
+  align-items: center; justify-content: center; padding: 3vh 3vw;
+  background: rgba(0,0,0,.94); cursor: zoom-out;
+}
+.bl-lightbox.bl-open { display: flex; }
+.bl-lightbox > img {
+  max-width: 94vw; max-height: 92vh; width: auto; height: auto;
+  object-fit: contain; margin: 0; border: 4px solid #fff; cursor: default;
+}
+.bl-decision { margin: 1em 0; }
+.bl-options { display: flex; flex-wrap: wrap; gap: 10px; }
+.bl-option {
+  display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
+  padding: 10px 16px; border: 2px solid var(--fg); font-weight: 700;
+}
+.bl-option input { width: 22px; height: 22px; margin: 0; accent-color: var(--fg); }
+.bl-option:has(input:checked) { background: var(--fg); color: var(--bg); }
+.bl-note { display: block; margin: 12px 0 1em; }
+.bl-note span { display: block; font-family: var(--font-mono); font-weight: 700; margin-bottom: 6px; }
+.bl-note textarea {
+  width: 100%; padding: 12px; background: var(--bg); color: var(--fg);
+  border: 2px solid var(--fg); font-family: var(--font-body); font-size: 18px; resize: vertical;
+}
+
+/* ============================================
+   Responsive — mobile
+   ============================================ */
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  nav.toc {
+    position: relative;
+    top: 0;
+    margin-bottom: 16px;
+    max-height: none;
+  }
+}
+@media (max-width: 768px) {
+  body { font-size: 18px; }
+  .brand { font-size: 19px; }
+  .card { padding: 16px 18px 28px; }
+}

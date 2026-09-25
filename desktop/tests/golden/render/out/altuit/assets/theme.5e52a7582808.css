@@ -1,0 +1,124 @@
+/**
+ * @name Altuit
+ * @background #111927
+ * @text #FFFFFF
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap');
+
+.theme-altuit {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  font-weight: 300;
+}
+
+/* Headings - Orange accent */
+.theme-altuit h1, .theme-altuit h2, .theme-altuit h3,
+.theme-altuit h4, .theme-altuit h5, .theme-altuit h6 {
+  font-weight: 400;
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+  line-height: 1.1;
+  color: #FF6B1A;
+}
+
+.theme-altuit h1 { font-size: 2.5em; border-bottom: 2px solid #09324B; padding-bottom: 0.3em; }
+.theme-altuit h2 { font-size: 2em; border-bottom: 1px solid #09324B; padding-bottom: 0.3em; }
+.theme-altuit h3 { font-size: 1.5em; }
+.theme-altuit h4 { font-size: 1.25em; color: #FFFFFF; }
+.theme-altuit h5 { font-size: 1.1em; color: #FFFFFF; font-weight: 400; }
+.theme-altuit h6 { font-size: 1em; color: #09324B; font-weight: 400; }
+
+/* Body elements */
+.theme-altuit p { margin: 1em 0; font-weight: 300; }
+.theme-altuit ul { margin: 1em 0; padding-left: 2em; list-style-type: disc; }
+.theme-altuit ol { margin: 1em 0; padding-left: 2em; list-style-type: decimal; }
+.theme-altuit li { margin: 0.5em 0; }
+.theme-altuit strong, .theme-altuit b { font-weight: 600; }
+.theme-altuit em, .theme-altuit i { font-style: italic; }
+
+/* Links - Orange accent */
+.theme-altuit a { color: #FF6B1A; text-decoration: none; }
+.theme-altuit a:hover { color: #FF8A4C; text-decoration: underline; }
+
+/* Code - Dark blue-gray */
+.theme-altuit code { background: #1A2332; padding: 0.2em 0.4em; border-radius: 4px; font-size: 0.9em; }
+.theme-altuit pre { background: #1A2332; padding: 1em; border-radius: 8px; overflow-x: auto; border: 1px solid #09324B; }
+.theme-altuit pre code { background: none; padding: 0; }
+
+/* Blockquotes - Orange border */
+.theme-altuit blockquote { border-left: 4px solid #FF6B1A; padding-left: 1em; color: #B0B0B0; margin: 1em 0; }
+
+/* Highlight/mark - Transparent bg with lime text */
+.theme-altuit mark { background: transparent; color: #BFFF00; }
+
+/* Tables */
+.theme-altuit table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  font-size: 0.9em;
+  font-weight: 300;
+}
+.theme-altuit th, .theme-altuit td {
+  border: 1px solid #09324B;
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  color: #FFFFFF;
+  font-weight: 300;
+}
+.theme-altuit th {
+  background: #1A2332;
+  font-weight: 400;
+}
+.theme-altuit th img,
+.theme-altuit td img {
+  max-width: none;
+  width: auto;
+  height: auto;
+  display: block;
+  margin: 12px auto 0 auto;
+}
+
+/* Images outside tables */
+.theme-altuit img {
+  display: inline;
+  max-width: 100%;
+  height: auto;
+}
+
+/* Horizontal rule */
+.theme-altuit hr { border: none; border-top: 1px solid #09324B; margin: 2em 0; }
+
+/* YouTube thumbnail - click to open in browser */
+.theme-altuit .youtube-thumbnail {
+  position: relative;
+  display: inline-block;
+  cursor: pointer;
+  margin: 1em 0;
+  max-width: 100%;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #09324B;
+}
+
+.theme-altuit .youtube-thumbnail img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.theme-altuit .youtube-thumbnail .youtube-play-button {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0.8;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.theme-altuit .youtube-thumbnail:hover .youtube-play-button {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.1);
+}

@@ -1,0 +1,24 @@
+{
+  "files": {
+    "assets/page.8c74248d8e1e.js": "8c74248d8e1ee2adc4b48c9f2d8e301653c76c676da03df53d93b56fc05e0b0f",
+    "assets/site.629e3f395688.css": "629e3f3956887177eaad9c5da458b794ca901fdaec28e4a3496fc51446ff6278",
+    "assets/theme.cecd697b607f.css": "cecd697b607f33e0693d00e1a5394a05e693139386f28fa3cafe17b1453fa9ea",
+    "organized.html": "085db40a0e4345d6d669cef75b9eccfbc1fbe940e19dedccd3a8a20a9045e463",
+    "organized.md": "c7f5e3f61c92e25f164fc5e7c3987c11eebc65e8f1decae7a8d6b60d01eba8f8",
+    "outline.html": "de3f0d133c561ed62872fd3792a85396466ba8db6bda058dc57c118d28a007b9",
+    "outline.md": "d6c7126e3475ab1309bcdbc5000067418698ec96a66a43f45e1b077f08863806",
+    "photos/photo-001.jpg": "1f4ba8c58b05a31b76a8ae8385c97f24b45052fa8b71aba4c82590fabcaabbbd",
+    "summary.html": "0f7753510564ba76c29adddba86b1528acdaa98493afaeacf9d8f11b0eb26581",
+    "summary.md": "56c37d3f563a7fa3689e2042e167a8bc47c4d0f45acee6f53da153414c44d0c2",
+    "transcript.html": "07b9666a4e4fcc1755b926bda2ef13bc4ce70ab93cc23a25eaca235834dec1b3",
+    "transcript.md": "6cf23e05a0898b591afe5aa6e0cddeb57ef04d4e7250893e2f7aa55dc4402dfe"
+  },
+  "pages": [
+    "transcript",
+    "summary",
+    "outline",
+    "organized"
+  ],
+  "renderer": "r1cord-render/1",
+  "theme": "altuit-toc-sketchnote"
+}

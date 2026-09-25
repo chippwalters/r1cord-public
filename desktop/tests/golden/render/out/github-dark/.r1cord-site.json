@@ -1,0 +1,23 @@
+{
+  "files": {
+    "assets/site.f27f9c4f4b92.css": "f27f9c4f4b92752d614643a59a6f27d1364f32c43aafce4133d56e5a02e5fb2b",
+    "assets/theme.81b5a43b84a2.css": "81b5a43b84a28e022f034cb4f7898544b530061f141d2cfe38d8d0bce49e6b7d",
+    "organized.html": "37ebdd3b20ed69059e47770cb5c06f655d756a9a8d24426cb9d339d58f654932",
+    "organized.md": "c7f5e3f61c92e25f164fc5e7c3987c11eebc65e8f1decae7a8d6b60d01eba8f8",
+    "outline.html": "d3ecc25928428fa6ad72cf8a594ee0941e055551a9d0fb80d3ac7451aa69dc72",
+    "outline.md": "d6c7126e3475ab1309bcdbc5000067418698ec96a66a43f45e1b077f08863806",
+    "photos/photo-001.jpg": "1f4ba8c58b05a31b76a8ae8385c97f24b45052fa8b71aba4c82590fabcaabbbd",
+    "summary.html": "c8abc3be8fbfd10511b0c4dff1042f103e6a581bbfb0cba51401d334df0fe9b2",
+    "summary.md": "56c37d3f563a7fa3689e2042e167a8bc47c4d0f45acee6f53da153414c44d0c2",
+    "transcript.html": "d7166a69786cfd1ae25d7b06f2e5ec63ca9cf8833c1cbf39912d61d38bc8f348",
+    "transcript.md": "6cf23e05a0898b591afe5aa6e0cddeb57ef04d4e7250893e2f7aa55dc4402dfe"
+  },
+  "pages": [
+    "transcript",
+    "summary",
+    "outline",
+    "organized"
+  ],
+  "renderer": "r1cord-render/1",
+  "theme": "github-dark"
+}

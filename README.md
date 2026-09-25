@@ -3,9 +3,8 @@
 **This repository is the source code.** If you just want to install R1CORD, you do not need
 anything here — go to **https://www.widgetgadget.com/cw1/R1CORD/** and download it.
 
-> **Beta.** The app (0.3.3) and the desktop companion (0.3.4) are beta releases. A new
-> cross-platform architecture for the desktop companion (Windows, macOS and Linux) is coming soon;
-> today's companion is Windows-only.
+> **Beta.** The app (0.3.3) and the desktop companion, R1CORD Desktop (0.4.0), are beta releases.
+> R1CORD Desktop runs on Windows today; macOS and Linux versions are coming.
 
 ---
 
@@ -33,7 +32,7 @@ That folder is everything a user needs:
 | `user-guide.html` | Start here — install, record, and the desktop companion |
 | `Installing-Android-on-R1.html` | The prerequisite: getting Android onto the R1 |
 | `R1CORD-<version>.apk` | The app, signed and ready to install |
-| `r1cord-server-<version>.zip` | The desktop companion |
+| `R1CORD-Desktop-<version>-win-x64.zip` | R1CORD Desktop, the desktop companion (Windows) |
 | `SHA256SUMS.txt` | Checksums, so you can verify what you downloaded |
 
 Building from source instead gives you an APK signed with **your** key, which Android treats as a
@@ -51,9 +50,9 @@ The same two manuals, in Markdown:
 
 ```text
 app/            Android recorder (Kotlin, Jetpack Compose, minSdk 33)
-server/         Desktop companion (Python 3.12, FastAPI, faster-whisper)
+desktop/        R1CORD Desktop, the companion (Electron, Node 24, Fastify, whisper.cpp)
 docs/           User guide and the Android installation guide
-build.ps1       Builds the signed APK, the companion zip and checksums
+build.ps1       Builds the signed APK, the R1CORD Desktop zip and checksums
 ```
 
 ## Building the app
@@ -89,23 +88,32 @@ unsigned and will not install — that is deliberate. Release builds run R8 and 
 (~6.8 MB against ~75 MB debug); keep rules are in `app/proguard-rules.pro`, and shrinking can only
 break things at runtime, so smoke-test a release build on a device before shipping it.
 
-`build.ps1` does the whole release pipeline — signed APK, companion zip, `SHA256SUMS.txt` — into
-`dist\release\`.
+`build.ps1` does the whole release pipeline — signed APK, R1CORD Desktop zip, `SHA256SUMS.txt` —
+into `dist\release\`.
 
-## Building / running the companion
+## Building / running R1CORD Desktop
+
+Needs Node.js 24 (npm) on Windows x64. From `desktop\`:
 
 ```powershell
-cd server
-.\install.bat          # finds or installs Python 3.12, creates .venv, fetches adb if needed
+npm ci
+npm start              # runs the app from source
+npm test               # unit and HTTP tests (no GPU, device or network needed)
 ```
 
-Then plug the R1 in (USB debugging on) and click **Adopt** on the admin page's Devices tab.
-Details, settings and the Wi-Fi alternative are in the
-[user guide](docs/user-guide.md#using-the-desktop-companion); the server's own
-[README](server/README.md) covers configuration and internals.
+Packaging (`npm run make`, or `build.ps1 -ServerOnly` from the repo root) also needs the audio
+decoder, which is not in git: take `bin\ffmpeg.exe` from
+[ffmpeg-8.0.1-essentials_build.zip](https://github.com/GyanD/codexffmpeg/releases/download/8.0.1/ffmpeg-8.0.1-essentials_build.zip)
+and put it in `desktop\binaries\win32\`. The build checks its SHA-256 and refuses any other file;
+`desktop\binaries\win32\NOTICE.txt` gives its licence (GPL v3, run unmodified as a separate
+program). The zip lands in `desktop\out\make\zip\win32\x64\`.
 
-Tests (no GPU or device needed): `server\.venv\Scripts\python.exe -m pytest -q` (327 companion tests) and
-`.\gradlew.bat :app:testDebugUnitTest` (100 app tests on the JVM, Robolectric).
+The app keeps its settings in `%LOCALAPPDATA%\R1CORD\config.toml` and its recordings under
+`%LOCALAPPDATA%\R1CORD\data` unless you change them. Plug the R1 in (USB debugging on) and click
+**Adopt** on the Devices page. Details, settings and the Wi-Fi alternative are in the
+[user guide](docs/user-guide.md#using-the-desktop-companion).
+
+App tests: `.\gradlew.bat :app:testDebugUnitTest` (100 tests on the JVM, Robolectric).
 
 ## Design notes
 
@@ -116,10 +124,11 @@ Tests (no GPU or device needed): `server\.venv\Scripts\python.exe -m pytest -q` 
   when it has not, and never deletes anything from the device.
 - **The companion only reads.** It pulls files from an adopted device; it never writes to or
   deletes from the R1.
-- Transcription is [faster-whisper](https://github.com/SYSTRAN/faster-whisper) running locally,
-  CPU by default and CUDA if you have it. Optional AI reviews (summary, outline, cleaned-up text)
-  need a coding-assistant CLI signed in on the PC; publishing them as web pages needs only a folder
-  your web host serves. Both are off unless configured.
+- Transcription is [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (through
+  `@fugood/whisper.node`) running locally, on the graphics card through Vulkan when it can and on
+  the CPU otherwise. Optional AI reviews (summary, outline, cleaned-up text) need a
+  coding-assistant CLI signed in on the PC; publishing them as web pages needs only a folder your
+  web host serves. Both are off unless configured.
 
 ## Status and license
 

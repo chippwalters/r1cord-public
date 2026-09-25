@@ -1,13 +1,14 @@
-# Builds the release APK, the desktop-companion zip and SHA-256 checksums into dist\release\.
+# Builds the release APK, the R1CORD Desktop zip and SHA-256 checksums into dist\release\.
 #
-#   powershell -ExecutionPolicy Bypass -File build.ps1            # app + server + checksums
+#   powershell -ExecutionPolicy Bypass -File build.ps1            # app + R1CORD Desktop + checksums
 #   powershell -ExecutionPolicy Bypass -File build.ps1 -AppOnly
-#   powershell -ExecutionPolicy Bypass -File build.ps1 -ServerOnly
+#   powershell -ExecutionPolicy Bypass -File build.ps1 -ServerOnly  # R1CORD Desktop only
 #
 # Release signing comes from four properties in %USERPROFILE%\.gradle\gradle.properties
 # (R1CORD_STORE_FILE, R1CORD_STORE_PASSWORD, R1CORD_KEY_ALIAS, R1CORD_KEY_PASSWORD).
 # Without them the build is unsigned and this script stops rather than producing an APK
-# that cannot be installed. See README.md.
+# that cannot be installed. R1CORD Desktop needs Node.js 24 and desktop\binaries\win32\ffmpeg.exe.
+# See README.md.
 
 param(
     [switch]$AppOnly,
@@ -16,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$serverDir = Join-Path $here "server"
+$desktopDir = Join-Path $here "desktop"
 $out = Join-Path $here "dist\release"
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 
@@ -56,15 +57,24 @@ if (-not $ServerOnly) {
 }
 
 if (-not $AppOnly) {
-    Write-Host "== desktop companion =="
-    $zip = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $serverDir "package.ps1") -OutDir $out |
-        Select-Object -Last 1
-    if (-not (Test-Path $zip)) { throw "server package.ps1 did not produce a zip" }
-    Write-Host ("Server: {0} ({1:N0} KB)" -f (Split-Path -Leaf $zip), ((Get-Item $zip).Length / 1KB))
+    $version = (Get-Content (Join-Path $desktopDir "package.json") -Raw | ConvertFrom-Json).version
+    Write-Host "== R1CORD Desktop $version =="
+    Push-Location $desktopDir
+    try {
+        & npm.cmd ci
+        if ($LASTEXITCODE -ne 0) { throw "npm ci failed ($LASTEXITCODE)" }
+        & npm.cmd run make
+        if ($LASTEXITCODE -ne 0) { throw "npm run make failed ($LASTEXITCODE)" }
+    } finally { Pop-Location }
+    $made = Join-Path $desktopDir "out\make\zip\win32\x64\R1CORD Desktop-win32-x64-$version.zip"
+    if (-not (Test-Path $made)) { throw "forge did not produce $made" }
+    $zip = Join-Path $out "R1CORD-Desktop-$version-win-x64.zip"
+    Copy-Item $made $zip -Force
+    Write-Host ("Desktop: {0} ({1:N1} MB)" -f (Split-Path -Leaf $zip), ((Get-Item $zip).Length / 1MB))
 }
 
 # Keep one build of each artifact.
-foreach ($pattern in @("R1CORD-*.apk", "r1cord-server-*.zip")) {
+foreach ($pattern in @("R1CORD-*.apk", "R1CORD-Desktop-*-win-x64.zip")) {
     Get-ChildItem $out -Filter $pattern | Sort-Object LastWriteTime -Descending |
         Select-Object -Skip 1 | ForEach-Object { Remove-Item $_.FullName -Force }
 }

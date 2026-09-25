@@ -11,15 +11,14 @@ local.properties
 *.keystore
 gradle.properties.local
 
-# Python
-server/.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
-*.egg-info/
+# R1CORD Desktop (Electron / Node)
+desktop/node_modules/
+desktop/out/
+desktop/.vite/
+# 99 MB, downloaded by the builder: see desktop/forge.config.cjs
+desktop/binaries/win32/ffmpeg.exe
 
 # Downloaded tools
-server/tools/
 platform-tools/
 
 # Logs and scratch

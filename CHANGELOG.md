@@ -1,7 +1,23 @@
 # Changelog
 
-Versions are the app's `versionName`; the desktop companion carries its own version in
-`server/pyproject.toml` and is noted where it changed.
+Versions are the app's `versionName`; the desktop companion carries its own version (since 0.4.0
+in `desktop/package.json`) and is noted where it changed.
+
+## R1CORD Desktop 0.4.0 (beta) — the companion becomes a Windows app
+
+- **R1CORD Desktop replaces the Python companion.** One portable zip: unzip, run
+  `R1CORD Desktop.exe`. No installer and no Python. It has its own window and taskbar icon, and
+  keeps the same local address and API, so the R1 app needs no update. Settings, recordings,
+  transcripts, pages and paired R1s from 0.3.x are used as they are.
+- **Speech recognition is whisper.cpp**, on the graphics card through Vulkan (NVIDIA, AMD, Intel)
+  or else the processor. Its model (about 870 MB) downloads once, from the System page or with
+  the first recording. The audio decoder ships inside the app.
+- **One-click `adb`:** if Google's Android tool is missing, the Devices page downloads it from
+  Google (signature checked).
+- **Start by itself** from the taskbar icon's Start menu: when the R1 is plugged in, or at login.
+- **The dashboard is off through a tunnel by default**; Settings → Allow admin through the
+  tunnel turns it back on, with the admin password. The R1 can still send through a tunnel.
+- Still beta; Windows only for now, with macOS and Linux to follow.
 
 ## Companion 0.3.4 (beta) — security fix and restart recovery
 

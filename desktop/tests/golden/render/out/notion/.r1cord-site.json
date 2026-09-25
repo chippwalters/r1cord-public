@@ -1,0 +1,23 @@
+{
+  "files": {
+    "assets/site.31d26dcc566c.css": "31d26dcc566c4a0a6baa996e7b1673b84279a33aee73ea63124f99e84137130a",
+    "assets/theme.fc26dd9f30fb.css": "fc26dd9f30fb45ce44c9067f3101617f3a626d7e3b324aae95fce012aa8b687e",
+    "organized.html": "c3f112773507ecfd2941f5b23887f444bcca4e0a818521da62059b075fba3229",
+    "organized.md": "c7f5e3f61c92e25f164fc5e7c3987c11eebc65e8f1decae7a8d6b60d01eba8f8",
+    "outline.html": "a145b279580b8932d9637150615ae0bb5b5bdfc1d4b0988c902f4a1efe303c90",
+    "outline.md": "d6c7126e3475ab1309bcdbc5000067418698ec96a66a43f45e1b077f08863806",
+    "photos/photo-001.jpg": "1f4ba8c58b05a31b76a8ae8385c97f24b45052fa8b71aba4c82590fabcaabbbd",
+    "summary.html": "ed6cf68ca7889473f8c501b42fa058238862642762bca544f4cbb892c9caf0a2",
+    "summary.md": "56c37d3f563a7fa3689e2042e167a8bc47c4d0f45acee6f53da153414c44d0c2",
+    "transcript.html": "b78e98c7ad20991455bae52fa1e28cc005411f5919b83ed7230a0535b767d729",
+    "transcript.md": "6cf23e05a0898b591afe5aa6e0cddeb57ef04d4e7250893e2f7aa55dc4402dfe"
+  },
+  "pages": [
+    "transcript",
+    "summary",
+    "outline",
+    "organized"
+  ],
+  "renderer": "r1cord-render/1",
+  "theme": "notion"
+}

@@ -23,7 +23,7 @@ You need two things from the [R1CORD download folder](../README.md#downloads):
 | File | What it is |
 |---|---|
 | `R1CORD-<version>.apk` | The app, for the R1 |
-| `r1cord-server-<version>.zip` | The optional desktop companion, for a Windows PC (Mac and Linux coming soon) |
+| `R1CORD-Desktop-<version>-win-x64.zip` | R1CORD Desktop, the optional desktop companion, for a Windows PC (Mac and Linux coming soon) |
 
 Want the source code as well? R1CORD is open source: **[github.com/chippwalters/r1cord-public](https://github.com/chippwalters/r1cord-public)**.
 
@@ -37,7 +37,7 @@ There is no app store on this device, so the app is installed over USB from your
 4. In the platform-tools folder, run:
 
    ```text
-   adb install R1CORD-0.3.2.apk
+   adb install R1CORD-0.3.3.apk
    ```
 
    It should print `Success`. If it says `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, an older R1CORD is on the device that was signed differently — `adb uninstall com.chippwalters.r1cord` first. That clears the app's list of recordings, though the recording files themselves stay on the device.
@@ -51,14 +51,14 @@ To update later, run the same command with `-r` added (`adb install -r R1CORD-<v
 `SHA256SUMS.txt` in the download folder lists a fingerprint for each file, so you can confirm yours arrived intact. In PowerShell:
 
 ```text
-Get-FileHash .\R1CORD-0.3.2.apk -Algorithm SHA256
+Get-FileHash .\R1CORD-0.3.3.apk -Algorithm SHA256
 ```
 
 Compare the result with the matching line in `SHA256SUMS.txt`; they should be identical apart from upper/lower case.
 
-### Optional: the desktop companion
+### Optional: R1CORD Desktop
 
-The companion transcribes your recordings on your own PC. It is entirely optional — the recorder works without it — and nothing is sent to any cloud service. Setup is in [Using the desktop companion](#using-the-desktop-companion), near the end of this guide.
+R1CORD Desktop, the desktop companion, transcribes your recordings on your own PC. It is entirely optional — the recorder works without it — and nothing is sent to any cloud service. Setup is in [Using the desktop companion](#using-the-desktop-companion), near the end of this guide.
 
 ## Contents
 
@@ -206,7 +206,7 @@ Whichever way you choose: copying does **not** free up space on the R1, and the 
 
 ## Using the desktop companion
 
-The companion is a small program for a Windows PC. It takes recordings off the R1 and turns each one into a text transcript, using speech recognition that runs **on your own computer** — nothing is uploaded to any cloud service, and it works with the PC offline.
+R1CORD Desktop is the desktop companion: an app for a Windows PC. It takes recordings off the R1 and turns each one into a text transcript, using speech recognition that runs **on your own computer** — nothing is uploaded to any cloud service, and it works with the PC offline.
 
 It is optional. The recorder is complete without it.
 
@@ -214,11 +214,16 @@ It is optional. The recorder is complete without it.
 
 ### Installing it
 
-1. Unzip `r1cord-server-<version>.zip` anywhere on your PC — your Documents folder is fine.
-2. Double-click **`install.bat`** and let it finish. It sets up everything it needs, including Python and Google's Android tools if you do not already have them, and offers to download Python for you if it is missing. Expect a few minutes and a few hundred megabytes on the first run.
-3. When it is done, the admin page opens in your browser at `http://127.0.0.1:8765/admin`. There is no login to remember: the page is only reachable from the PC itself.
+1. Unzip `R1CORD-Desktop-<version>-win-x64.zip` anywhere on your PC — your Documents folder is fine. There is no installer and no Python to set up.
+2. Double-click **`R1CORD Desktop.exe`** in the unzipped folder. The app is not code-signed yet, so the first time Windows may say *Windows protected your PC*: click **More info**, then **Run anyway**.
+3. The R1CORD Desktop window opens on its dashboard, and the R1CORD icon appears in the taskbar. There is no login to remember: the dashboard is only reachable from the PC itself (it is also at `http://127.0.0.1:8765/admin` in any browser on this PC).
+4. Speech recognition needs a one-time download of its model, about 870 MB. It starts by itself with the first recording, or earlier from the **System** page: **Download model**. Nothing is downloaded until then.
+5. For USB mode the PC also needs Google's Android tool, `adb`. If it is not already on the PC, the **Devices** page offers **Download Android platform tools** — one click, about 7 MB, straight from Google. Sending over Wi-Fi does not need it.
+6. To have it start by itself, right-click the taskbar icon and choose **Start** → **At login**, or **When the R1 is plugged in**.
 
-`uninstall.bat` removes it again and leaves your transcripts alone.
+To remove it, choose **Quit R1CORD Desktop** from the taskbar icon and delete the unzipped folder. Your recordings and transcripts stay where they are.
+
+**Coming from the earlier companion (r1cord-server 0.3.x)?** Quit it from its own taskbar icon (**Quit R1CORD Server**) and run the old folder's `uninstall.bat` — it removes the old start-up task and Start-menu entry and keeps your settings and recordings. Then start R1CORD Desktop as above. It uses the same settings, recordings, transcripts, pages and paired R1s, so there is nothing to move or pair again. If the old companion was using its own copy of `adb`, USB mode will ask for **Download Android platform tools** once.
 
 ### Approving your R1
 
@@ -228,9 +233,9 @@ Nothing is ever copied from a device you have not adopted. That is what stops th
 
 ### What happens after that
 
-Every time the R1 is plugged in, the admin page opens on your PC and each finished recording is copied across and transcribed. Recordings still in progress are left alone until you press Stop. A recording is never processed twice, and **nothing is ever deleted from the R1** — the companion only reads.
+Every time the R1 is plugged in, the R1CORD Desktop window comes to the front and each finished recording is copied across and transcribed. Recordings still in progress are left alone until you press Stop. A recording is never processed twice, and **nothing is ever deleted from the R1** — the companion only reads.
 
-Watch progress on the admin page. Across the top, four tiles show whether the R1 is connected, what the companion is working on now, how many jobs are waiting, and whether everything it depends on is ready. The page refreshes itself while a job is running.
+Watch progress on the dashboard. Across the top, four tiles show whether the R1 is connected, what the companion is working on now, how many jobs are waiting, and whether everything it depends on is ready. The page refreshes itself while a job is running.
 
 Your recordings, transcripts and a log of each job are in:
 
@@ -240,20 +245,20 @@ C:\Users\<you>\AppData\Local\R1CORD\data
 
 with each recording in its own folder: the audio, any photos, and `transcript.txt`. The **Recordings** list below the tiles has one row per recording, with its status and the writer that wrote its reviews. Click a recording's name for its job details and log. Each row also gives you its pages and its audio without digging for that folder:
 
-![The Recordings list on the companion's admin page](images/5c1e9a07/recent_jobs.svg)
+![The Recordings list on the companion's dashboard](images/5c1e9a07/recent_jobs.svg)
 
 1. **Pages** — Transcript, Summary, Outline and Organized, as far as they exist. A name opens the published web page; one tagged *LOCAL* is not published and opens the same page from this PC instead. The **.md** beside each name downloads its Markdown.
 2. **Length** — how long the recording is.
 3. **Size** — how big the recording's audio file is.
 4. **Play** — plays the recording right there in the page; press it again to pause. While it plays, Length counts up.
-5. **Download** — saves a copy through the browser.
-6. **Folder** — opens the folder that holds it in File Explorer, in front of the browser, with the file selected.
+5. **Download** — saves a copy of the audio.
+6. **Folder** — opens the folder that holds it in File Explorer, in front, with the file selected.
 7. **Add review** — writes a review the recording does not have yet (or rewrites one) from the stored transcript, without re-uploading anything. It is published if the recording's pages were.
 8. **Delete** — removes the recording from this PC, after you confirm: the audio, transcript, reviews, published pages and job history. The copy on the R1 is untouched, and the companion will not copy it back when you plug in again. Delete and Add review are greyed out while the recording is being processed.
 
-Folder acts on the PC itself, so it only appears when the admin page is open on that PC. Play and Download work from anywhere you can open the admin page.
+Folder acts on the PC itself, so it only appears when the dashboard is open on that PC. Play and Download work from anywhere you can open the dashboard.
 
-The **System** page lists everything the companion depends on — speech recognition, the AI reviews writer, USB mode, publishing, email and free disk space — each marked *OK*, *Needs attention* or *Not in use*, with a one-line detail. When the System tile at the top of the dashboard says something needs attention, click it to go there.
+The **System** page lists everything the companion depends on — speech recognition and its model, the AI reviews writer, USB mode, publishing, email and free disk space — each marked *OK*, *Needs attention* or *Not in use*, with a one-line detail. When the System tile at the top of the dashboard says something needs attention, click it to go there.
 
 ### AI reviews
 
@@ -269,16 +274,15 @@ Each review's instructions are in the same Settings section, one box per review,
 
 ### The R1CORD icon in the taskbar
 
-While the companion is running, the R1CORD logo sits in the notification area at the right-hand end of the taskbar. Hover over it for a one-line status; click it to open the admin page; right-click it for this menu:
+While R1CORD Desktop is running, the R1CORD logo sits in the notification area at the right-hand end of the taskbar. Hover over it for a one-line status; click it to open the R1CORD Desktop window; right-click it for its menu:
 
-![The companion's taskbar icon and its menu](images/5c1e9a07/tray_menu.svg)
-
-1. **Status** — whether the R1 is connected, and what the companion is doing (*Idle*, or the job it is working on).
-2. **Open dashboard** — the admin page. **Devices** and **Settings** open those pages.
-3. **USB mode** and **Email finished jobs** — on/off switches; a tick means on. Email stays greyed out until an address is set on the Settings page.
-4. **Open recordings folder** — and **Open logs folder** below it, for when something needs looking into.
-5. **Quit R1CORD Server** — stops the companion until you start it again.
-6. **The icon** — the R1CORD logomark.
+1. **R1CORD Desktop** — opens the window, like clicking the icon.
+2. **Status** — whether the R1 is connected, and what the companion is doing (*Idle*, or the job it is working on).
+3. **Open dashboard** — the dashboard. **Devices** and **Settings** open those pages.
+4. **USB mode** and **Email finished jobs** — on/off switches; a tick means on. Email stays greyed out until an address is set on the Settings page.
+5. **Open recordings folder** — and **Open logs folder** below it, for when something needs looking into.
+6. **Start** — when R1CORD Desktop starts by itself: **Manual** (only when you start it), **When the R1 is plugged in**, or **At login** (it then runs in the background and restarts if it ever crashes).
+7. **Quit R1CORD Desktop** — stops the companion until you start it again. Closing the window only hides it; the companion keeps working in the background.
 
 When a job finishes, Windows shows a short notification: *Transcript ready*, the review's name (*Summary ready*), *AI reviews ready* for several, or *Job failed*.
 
@@ -293,9 +297,10 @@ If the PC has Google's `gws` command-line tool installed and signed in to your G
 On the admin page's **Settings** page:
 
 - **What to do with new recordings** (`usb_auto_action`) — `transcribe` is the default. `review` also writes the default AI reviews; `publish` writes them and publishes the pages. `archive` copies files without transcribing.
-- **Speech model** (`asr_model`) — the default is the most accurate one and downloads about 1.6 GB the first time it runs. If transcription is too slow on your PC, choose `small` or `medium`.
+- **Speech model** (`asr_model`) — the default is the most accurate one; its one-time download is about 870 MB. If transcription is too slow on your PC, choose `small` or `medium`. Speech recognition uses the PC's graphics card when it can (`asr_device` `auto`) and otherwise the processor.
 - **Where recordings are kept** (`datastore`) — point this at a drive with room if you record a lot.
-- **When the program runs** (`run_mode`) — by default it starts when you start it and shuts itself down about ten minutes after you unplug, so nothing sits running in the background. Set it to `always` if you would rather it stay on — you will want that if you send over Wi-Fi from elsewhere.
+- **When the program runs** (`run_mode`) — the same choice as the taskbar icon's **Start** menu: `plug` starts it when the R1 is plugged in and shuts it down about ten minutes after you unplug, so nothing sits running in the background; `always` starts it at login and keeps it on — you will want that if you send over Wi-Fi from elsewhere.
+- **Allow admin through the tunnel** — off by default. With it off, the dashboard answers only on this PC, even if a tunnel makes the companion reachable from outside; the R1 can still send through the tunnel. Turn it on to reach the dashboard from elsewhere; it then asks for the admin password shown on the same page.
 - **Page theme** (Settings → **Pages**) — the look of the pages, from the same twelve themes as the MD DOCS app, with a live preview. A new theme applies to pages made from then on; **Republish all pages** re-makes the published ones (**Preview republish** first shows what it would change).
 - **Email** (`email_enabled`, `email_to`) — see [Getting each review by email](#getting-each-review-by-email).
 
@@ -341,6 +346,8 @@ Nothing leaves the R1 unless you send it or copy it. R1CORD has no cloud account
 | "Pair with the desktop server in Settings first." | The R1 has not been paired yet. Settings → Desktop server → Pair, using the code your server shows. |
 | "Not paired or token revoked. Pair again in Settings." | The server no longer recognises this R1. Pair again. |
 | Status stays on PROCESSING | Your computer has not finished the job. Press REFRESH again; if it never changes, check the server on your computer. |
-| Plugged in, but nothing happens | On the computer: the R1 has to be approved once in the server's Devices page. On the R1: USB debugging must be on. |
-| No R1CORD icon in the taskbar | Click the **^** arrow next to the clock — Windows hides new icons there. If it is not there either, the companion is not running: start it from the Start menu. |
+| Plugged in, but nothing happens | On the computer: the R1 has to be approved once on the Devices page, and USB mode needs `adb` — if the Devices page offers **Download Android platform tools**, click it. On the R1: USB debugging must be on. |
+| No R1CORD icon in the taskbar | Click the **^** arrow next to the clock — Windows hides new icons there. If it is not there either, R1CORD Desktop is not running: start it from the Start menu, or double-click `R1CORD Desktop.exe` in its folder. |
+| *Windows protected your PC* when starting R1CORD Desktop | The app is not code-signed yet. Click **More info**, then **Run anyway**. |
+| The dashboard says *Admin unavailable* from another computer | Remote admin through a tunnel is off by default. On the PC itself, open Settings and tick **Allow admin through the tunnel**. |
 | The screen dims while recording | Normal after about 30 seconds. Touch it to brighten. |

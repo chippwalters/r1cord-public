@@ -1,0 +1,39 @@
+/**
+ * @name GitHub Dark
+ * @background #0D1117
+ * @text #C9D1D9
+ */
+
+.theme-github-dark {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+  line-height: 1.6;
+}
+
+.theme-github-dark h1, .theme-github-dark h2, .theme-github-dark h3,
+.theme-github-dark h4, .theme-github-dark h5, .theme-github-dark h6 {
+  font-weight: 600;
+  margin-top: 24px;
+  margin-bottom: 16px;
+}
+
+.theme-github-dark h1 { font-size: 2em; border-bottom: 1px solid #30363d; padding-bottom: 0.3em; }
+.theme-github-dark h2 { font-size: 1.5em; border-bottom: 1px solid #30363d; padding-bottom: 0.3em; }
+.theme-github-dark h3 { font-size: 1.25em; }
+
+.theme-github-dark p { margin-top: 0; margin-bottom: 16px; }
+.theme-github-dark ul { margin: 16px 0; padding-left: 2em; list-style-type: disc; }
+.theme-github-dark ol { margin: 16px 0; padding-left: 2em; list-style-type: decimal; }
+.theme-github-dark li { margin-top: 0.25em; }
+.theme-github-dark a { color: #58a6ff; text-decoration: none; }
+.theme-github-dark a:hover { text-decoration: underline; }
+.theme-github-dark code { background: #161b22; padding: 0.2em 0.4em; border-radius: 6px; font-size: 85%; }
+.theme-github-dark pre { background: #161b22; padding: 16px; border-radius: 6px; overflow-x: auto; }
+.theme-github-dark pre code { background: none; padding: 0; }
+.theme-github-dark blockquote { border-left: 0.25em solid #58a6ff; padding-left: 1em; color: #8b949e; }
+.theme-github-dark table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 16px 0; }
+.theme-github-dark th, .theme-github-dark td { border: 1px solid #30363d; padding: 6px 13px; text-align: center; vertical-align: top; }
+.theme-github-dark th { background: #161b22; font-weight: 600; }
+
+/* Images - full width outside tables, natural size inside */
+.theme-github-dark img { max-width: 100%; height: auto; }
+.theme-github-dark td img { width: auto; height: auto; display: inline-block; }

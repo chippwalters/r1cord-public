@@ -1,0 +1,41 @@
+/**
+ * @name Modern Dark
+ * @background #1E1E1E
+ * @text #E1E1E1
+ */
+
+.theme-modern-dark {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  line-height: 1.6;
+}
+
+.theme-modern-dark h1, .theme-modern-dark h2, .theme-modern-dark h3,
+.theme-modern-dark h4, .theme-modern-dark h5, .theme-modern-dark h6 {
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  color: #ffffff;
+}
+
+.theme-modern-dark h1 { font-size: 2.5em; border-bottom: 2px solid #3e3e3e; padding-bottom: 0.3em; }
+.theme-modern-dark h2 { font-size: 2em; border-bottom: 1px solid #3e3e3e; padding-bottom: 0.3em; }
+.theme-modern-dark h3 { font-size: 1.5em; }
+.theme-modern-dark h4 { font-size: 1.25em; }
+
+.theme-modern-dark p { margin: 1em 0; }
+.theme-modern-dark ul { margin: 1em 0; padding-left: 2em; list-style-type: disc; }
+.theme-modern-dark ol { margin: 1em 0; padding-left: 2em; list-style-type: decimal; }
+.theme-modern-dark li { margin: 0.5em 0; }
+.theme-modern-dark a { color: #58a6ff; text-decoration: none; }
+.theme-modern-dark a:hover { text-decoration: underline; }
+.theme-modern-dark code { background: #2c2c2c; padding: 0.2em 0.4em; border-radius: 3px; font-size: 0.9em; }
+.theme-modern-dark pre { background: #2c2c2c; padding: 1em; border-radius: 5px; overflow-x: auto; }
+.theme-modern-dark pre code { background: none; padding: 0; }
+.theme-modern-dark blockquote { border-left: 4px solid #58a6ff; padding-left: 1em; color: #b0b0b0; margin: 1em 0; }
+.theme-modern-dark table { border-collapse: collapse; table-layout: fixed; width: 100%; margin: 1em 0; }
+.theme-modern-dark th, .theme-modern-dark td { border: 1px solid #3e3e3e; padding: 0.5em; text-align: center; vertical-align: top; }
+.theme-modern-dark th { background: #2c2c2c; font-weight: 600; }
+
+/* Images - full width outside tables, natural size inside */
+.theme-modern-dark img { max-width: 100%; height: auto; }
+.theme-modern-dark td img { width: auto; height: auto; display: inline-block; }

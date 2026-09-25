@@ -1,0 +1,14 @@
+FFmpeg is free software. This product bundles ffmpeg.exe, used only to
+decode recorded audio (M4A/AAC and WAV) to 16 kHz mono PCM for transcription.
+The application runs it unmodified, as a separate program; it is not linked
+into the application.
+
+The binary is the ffmpeg 8.0.1 Windows "essentials" build from gyan.dev
+(version string 8.0.1-essentials_build-www.gyan.dev). It is configured with
+--enable-gpl --enable-version3, so it is licensed under the GNU General Public
+License version 3 or later (run `ffmpeg.exe -L` to print the license notice).
+
+Source and license: https://ffmpeg.org/legal.html
+FFmpeg 8.0.1 source: https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz
+Build, configuration and bundled library sources: https://www.gyan.dev/ffmpeg/builds/
+GPL version 3: https://www.gnu.org/licenses/gpl-3.0.txt

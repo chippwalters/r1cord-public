@@ -1,0 +1,622 @@
+/**
+ * @name Toolmaker-Noir
+ * @background #0E1013
+ * @text #F3F4F5
+ * @layout toc
+ *
+ * Generic dark documentation theme: the Altuit-TOC sidebar/card layout
+ * reskinned with the locked CHIPPWALTERS brand system (charcoal "toolmaker
+ * noir", orange-red accent, restrained teal, Space Grotesk / Jost / Hanken
+ * Grotesk / IBM Plex Mono). No logos, names, or product branding — drop in
+ * any Markdown and it renders as a clean branded webpage.
+ *
+ * Optional in-document tags (stripped from the exported output):
+ *   [theme:light]   — export defaults to the light palette instead of dark.
+ *   [brand-header]  — show a CHIPPWALTERS logo (linked to chippwalters.com)
+ *                     plus a Back button in the page header. Off by default.
+ *   [backlot-header] — the page becomes a review window: a numbered rail of
+ *                     stages in the header (read from backlot.json beside the
+ *                     page, or [backlot-header:path]), live choices in the
+ *                     body (- [ ] checks, - ( ) picks, [backlot-decision],
+ *                     [backlot-note]) and a Save answers button that writes
+ *                     <page>.answers.json beside the page.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Jost:wght@300;400;500&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+/* ============================================
+   CSS Variables - Dark/Light Theme Support
+   ============================================ */
+:root {
+  --accent: #FE4023;          /* primary orange-red */
+  --accent-hover: #FF6A52;    /* derived lighter accent (link hover) */
+  --secondary: #3FBBA9;       /* restrained teal */
+  --radius: 6px;              /* brand cards/buttons */
+  --radius-lg: 8px;           /* large wells/images */
+  --shadow: 0 6px 24px rgba(0,0,0,.45);
+  --content-w: 920px;
+  --sidebar-w: 280px;
+
+  --font-body: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-editorial: 'Jost', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Consolas', 'Monaco', 'Courier New', monospace;
+}
+
+/* Dark theme - for browser export and in-app preview */
+[data-theme="dark"],
+.theme-toolmaker-noir {
+  --bg: #0E1013;        /* page background */
+  --elev-1: #1B1F25;    /* card / sidebar surface */
+  --elev-2: #0C0E11;    /* recessed: header, table header */
+  --text: #F3F4F5;      /* primary text */
+  --body: #A7ADB6;      /* body copy */
+  --muted: #737B86;     /* metadata / mono captions */
+  --border: #2B3037;    /* card / panel outline */
+  --link: #FE4023;
+  --chip: #1B1F25;
+  --code-bg: #171B20;
+  /* Secondary (teal) button — toggle */
+  --btn-fg: #3FBBA9;
+  --btn-border: rgba(63,187,169,.55);
+  --btn-hover-bg: rgba(63,187,169,.12);
+}
+
+/* Light theme (toggle) - derived from the brand palette */
+[data-theme="light"] {
+  --bg: #F6F7F8;
+  --elev-1: #FFFFFF;
+  --elev-2: #EEF0F2;
+  --text: #16191F;
+  --body: #3A4049;
+  --muted: #6B727C;
+  --border: #DADEE3;
+  --link: #D8341B;      /* darker orange for AA contrast on light */
+  --chip: #EEF0F2;
+  --code-bg: #EEF0F2;
+  /* Secondary (teal) button — darker teal text for AA contrast on light */
+  --btn-fg: #2A7D70;
+  --btn-border: rgba(63,187,169,.7);
+  --btn-hover-bg: rgba(63,187,169,.14);
+}
+
+/* ============================================
+   Base Typography
+   ============================================ */
+html {
+  height: 100%;
+  scroll-padding-top: 80px;
+}
+
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: var(--font-body);
+  font-weight: 400;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  background: var(--bg);
+  color: var(--text);
+}
+
+* { box-sizing: border-box }
+a { color: var(--link); text-decoration: none }
+a:hover { color: var(--accent-hover); text-decoration: underline }
+strong, b { font-weight: 700; color: var(--text); }
+em, i { font-style: italic; }
+
+::selection { background: var(--accent); color: #0E1013; }
+
+/* ============================================
+   Custom Scrollbar
+   ============================================ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--elev-1);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+/* Firefox scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) var(--elev-1);
+}
+
+/* ============================================
+   Headings - Brand display type (Space Grotesk)
+   Primary text color; orange reserved as a scalpel (H1 rule, accents).
+   Scoped for in-app preview + global for export.
+   ============================================ */
+.theme-toolmaker-noir h1, .theme-toolmaker-noir h2, .theme-toolmaker-noir h3,
+.theme-toolmaker-noir h4, .theme-toolmaker-noir h5, .theme-toolmaker-noir h6,
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.theme-toolmaker-noir h1, h1 { font-size: 2.5em; border-bottom: 2px solid var(--accent); padding-bottom: 0.3em; }
+.theme-toolmaker-noir h2, h2 { font-size: 2em; font-weight: 500; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.theme-toolmaker-noir h3, h3 { font-size: 1.5em; font-weight: 500; }
+.theme-toolmaker-noir h4, h4 { font-size: 1.25em; font-weight: 500; }
+.theme-toolmaker-noir h5, h5 { font-size: 1.1em; font-weight: 500; }
+/* Looser leading for h2–h5 so multi-line headings don't crowd (h1 stays tight as the title) */
+.theme-toolmaker-noir h2, .theme-toolmaker-noir h3,
+.theme-toolmaker-noir h4, .theme-toolmaker-noir h5,
+h2, h3, h4, h5 { line-height: 1.3; }
+/* H6 reads as a mono structural label */
+.theme-toolmaker-noir h6, h6 {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ============================================
+   Header
+   ============================================ */
+.site-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--elev-2);
+  border-bottom: 1px solid var(--border);
+}
+.header-inner {
+  max-width: calc(var(--content-w) + var(--sidebar-w) + 64px);
+  margin: 0 auto;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.brand {
+  font-family: var(--font-editorial);
+  font-size: 18px;
+  display: flex;
+  align-items: center;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.spacer { flex: 1 }
+
+/* Brand logo (opt-in via the [brand-header] markdown tag). The inlined SVG's
+   wordmark uses currentColor, so it follows --text across the theme toggle;
+   the cube + .com stay brand orange. Override the global link hover so the
+   wordmark doesn't recolor/underline. */
+.brand-logo,
+.brand-logo:hover {
+  color: var(--text);
+  text-decoration: none;
+  gap: 0;
+}
+.brand-logo svg {
+  height: 30px;
+  width: auto;
+  display: block;
+}
+.brand-logo:hover { opacity: 0.85; }
+
+/* ============================================
+   Buttons - brand "secondary" (teal outline)
+   ============================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--btn-border);
+  background: transparent;
+  color: var(--btn-fg);
+  cursor: pointer;
+  text-decoration: none;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  transition: background .2s ease, border-color .2s ease, color .2s ease;
+}
+.btn:hover {
+  background: var(--btn-hover-bg);
+  border-color: var(--secondary);
+  color: var(--btn-fg);
+  text-decoration: none;
+}
+
+/* ============================================
+   Layout - Sidebar + Content
+   ============================================ */
+.layout {
+  max-width: calc(var(--content-w) + var(--sidebar-w) + 64px);
+  margin: 24px auto;
+  padding: 0 16px;
+  display: grid;
+  gap: 24px;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+}
+
+/* ============================================
+   TOC Sidebar
+   ============================================ */
+nav.toc {
+  position: sticky;
+  top: 84px;
+  align-self: start;
+  padding: 16px;
+  background: var(--elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+}
+.toc h3 {
+  margin: 0 0 8px 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border: none;
+}
+.toc ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.toc > ul > li {
+  margin: 4px 0;
+}
+.toc a {
+  color: var(--body);
+  text-decoration: none;
+  font-size: 14px;
+}
+.toc a:hover {
+  text-decoration: underline;
+  color: var(--accent);
+}
+
+/* TOC Header with Controls */
+.toc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.toc-header h3 { margin: 0; }
+.toc-controls {
+  display: flex;
+  gap: 4px;
+}
+.toc-controls button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px 10px;
+  font-size: 16px;
+  font-weight: 600;
+  border-radius: 4px;
+  line-height: 1;
+  font-family: var(--font-body);
+}
+.toc-controls button:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+/* Collapsible TOC Sections */
+.toc-section {
+  margin: 4px 0;
+}
+.toc-section-header {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 4px 0;
+}
+.toc-section-header:hover {
+  color: var(--accent);
+}
+.toc-toggle {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform 0.2s;
+}
+.toc-section.collapsed .toc-toggle {
+  transform: rotate(-90deg);
+}
+.toc-section-header a {
+  flex: 1;
+}
+.toc-children {
+  margin-left: 20px;
+  padding: 4px 0 4px 12px;
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+.toc-section.collapsed .toc-children {
+  display: none;
+}
+.toc-children li {
+  margin: 4px 0;
+}
+.toc-children a {
+  font-size: 13px;
+  color: var(--muted);
+}
+.toc-children a:hover {
+  color: var(--accent);
+}
+
+/* H1 level styling - slightly bolder */
+.toc-h1 > .toc-section-header a {
+  font-weight: 600;
+  font-size: 14px;
+}
+/* H2 level styling */
+.toc-h2 > .toc-section-header a {
+  font-weight: 400;
+  font-size: 13px;
+}
+
+/* ============================================
+   Content Card
+   ============================================ */
+.card {
+  background: var(--elev-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+
+/* Document Content Styling - for browser export (.doc) and in-app preview (.theme-toolmaker-noir) */
+.doc p, .theme-toolmaker-noir p { margin: 1em 0; color: var(--body); }
+.doc ul, .theme-toolmaker-noir ul {
+  margin: 1em 0;
+  padding-left: 2em;
+  list-style: disc outside;
+  color: var(--body);
+}
+.doc ol, .theme-toolmaker-noir ol {
+  margin: 1em 0;
+  padding-left: 2em;
+  list-style: decimal outside;
+  color: var(--body);
+}
+.doc li, .theme-toolmaker-noir li {
+  margin: 0.5em 0;
+  display: list-item;
+}
+.doc img, .theme-toolmaker-noir img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-lg);
+}
+.doc blockquote, .theme-toolmaker-noir blockquote {
+  border-left: 3px solid var(--accent);
+  padding-left: 1em;
+  color: var(--text);
+  margin: 1em 0;
+  font-family: var(--font-editorial);
+  font-weight: 300;
+  font-size: 1.15em;
+  line-height: 1.4;
+  font-style: normal;
+}
+.doc code, .theme-toolmaker-noir code {
+  background: var(--code-bg);
+  padding: 0.2em 0.4em;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+.doc pre, .theme-toolmaker-noir pre {
+  background: var(--code-bg);
+  padding: 1em;
+  border-radius: var(--radius-lg);
+  overflow-x: auto;
+  border: 1px solid var(--border);
+}
+.doc pre code, .theme-toolmaker-noir pre code {
+  background: none;
+  padding: 0;
+  color: var(--body);
+}
+.doc hr, .theme-toolmaker-noir hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 2em 0;
+}
+/* Highlight (==mark==) - subtle orange wash, on-brand */
+.doc mark, .theme-toolmaker-noir mark {
+  background: rgba(254,64,35,.18);
+  color: var(--text);
+  padding: 0.05em 0.2em;
+  border-radius: 3px;
+}
+[data-theme="light"] .doc mark {
+  background: rgba(254,64,35,.14);
+}
+
+/* Tables */
+.doc table, .theme-toolmaker-noir table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+  font-size: 0.9em;
+}
+.doc th, .doc td, .theme-toolmaker-noir th, .theme-toolmaker-noir td {
+  border: 1px solid var(--border);
+  padding: 8px 12px;
+  text-align: left;
+  vertical-align: top;
+  color: var(--body);
+}
+.doc th, .theme-toolmaker-noir th {
+  background: var(--elev-2);
+  color: var(--text);
+  font-weight: 600;
+}
+.doc th img, .doc td img,
+.theme-toolmaker-noir th img, .theme-toolmaker-noir td img {
+  max-width: none;
+  width: auto;
+  height: auto;
+  display: block;
+  margin: 12px auto 0 auto;
+}
+
+/* YouTube embeds - responsive 16:9 */
+.youtube-embed {
+  position: relative;
+  padding-bottom: 56.25%;
+  height: 0;
+  margin: 1em 0;
+  overflow: hidden;
+}
+.youtube-embed iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+}
+
+/* ============================================
+   Backlot — [backlot-header]: the stage rail, choices, notes, save
+   The document layout above is unchanged; these only add the second
+   header row and the answer controls inside the card.
+   ============================================ */
+.site-header:has(.bl-rail-row) ~ .layout nav.toc { top: 132px; max-height: calc(100vh - 148px); }
+html:has(.bl-rail-row) { scroll-padding-top: 128px; }
+.bl-rail-row { padding-top: 0; padding-bottom: 10px; gap: 6px 10px; }
+.bl-rail { display: flex; flex-wrap: wrap; gap: 4px 6px; min-height: 26px; }
+.bl-gate {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: var(--radius);
+  border: 1px solid transparent;
+  font-family: var(--font-mono); font-size: 11.5px; font-weight: 500;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+.bl-gate:hover { color: var(--text); border-color: var(--border); text-decoration: none; }
+.bl-gate.bl-current { color: var(--text); border-color: var(--accent); }
+.bl-num { color: var(--muted); }
+.bl-gate.bl-current .bl-num { color: var(--accent); }
+.bl-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--border); flex: none; }
+.bl-dot-answered { background: var(--secondary); }
+.bl-dot-accepted { background: var(--accent); }
+.bl-dot-skipped { background: var(--border); opacity: .5; }
+.bl-status {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--muted);
+}
+.bl-save { border-color: var(--accent); color: var(--accent); }
+.bl-save:hover { background: rgba(254,64,35,.12); border-color: var(--accent); color: var(--accent); }
+
+/* Choice items: the list item is the control */
+.doc li.bl-item {
+  list-style: none; margin: 8px 0 8px -1.4em; padding: 10px 12px;
+  background: var(--elev-2); border: 1px solid var(--border); border-radius: var(--radius);
+  cursor: pointer;
+}
+.doc li.bl-item:hover { border-color: var(--muted); }
+.doc li.bl-item:has(> input:checked) { border-color: var(--accent); color: var(--text); }
+.doc li.bl-item > input.bl-input { accent-color: var(--accent); margin: 0 10px 0 0; vertical-align: middle; }
+.doc li.bl-item > p:first-of-type { display: inline; margin: 0; }
+.doc li.bl-item img { display: block; margin-top: 8px; border-radius: 4px; }
+/* Several image choices in one list sit in a grid. Candidates are picked by
+   eye, so they must be big enough to read: ~2-up on a full content column,
+   collapsing to 1-up when the column is narrow. Click zooms to full size. */
+.doc ul:has(> li.bl-item img) {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+  gap: 16px; padding-left: 0;
+}
+.doc ul:has(> li.bl-item img) > li.bl-item { margin: 0; }
+.doc ul:has(> li.bl-item img) > li.bl-item img { width: 100%; }
+
+/* Backlot image lightbox */
+.doc img.bl-zoomable { cursor: zoom-in; }
+body.bl-lightbox-open { overflow: hidden; }
+.bl-lightbox {
+  position: fixed; inset: 0; z-index: 10000; display: none;
+  align-items: center; justify-content: center; padding: 3vh 3vw;
+  background: rgba(5,7,9,.92); cursor: zoom-out;
+}
+.bl-lightbox.bl-open { display: flex; }
+.bl-lightbox > img {
+  max-width: 94vw; max-height: 92vh; width: auto; height: auto;
+  object-fit: contain; margin: 0; border-radius: var(--radius);
+  border: 1px solid var(--border); box-shadow: 0 24px 80px rgba(0,0,0,.7);
+  cursor: default;
+}
+
+/* Decision and note blocks */
+.bl-decision { margin: 1em 0; }
+.bl-options { display: flex; flex-wrap: wrap; gap: 8px 10px; }
+.bl-option {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 9px 14px; background: var(--elev-2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--body); font-size: 14px;
+}
+.bl-option input { accent-color: var(--accent); margin: 0; }
+.bl-option:has(input:checked) { border-color: var(--accent); color: var(--text); }
+.bl-note { display: block; margin: 12px 0 1em; }
+.bl-note span {
+  display: block; color: var(--muted); font-family: var(--font-mono);
+  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 6px;
+}
+.bl-note textarea {
+  width: 100%; padding: 10px 12px; background: var(--elev-2);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); font-family: var(--font-body); font-size: 14px; resize: vertical;
+}
+.bl-note textarea:focus { outline: none; border-color: var(--accent); }
+
+/* ============================================
+   Responsive - Mobile
+   ============================================ */
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  nav.toc {
+    position: relative;
+    top: 0;
+    margin-bottom: 16px;
+  }
+}
+@media (max-width: 768px) {
+  .brand {
+    font-size: 16px;
+  }
+}

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+    <title>R1CORD Desktop</title>
+    <style>
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: #0E1013;
+        color: #F3F4F5;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card {
+        width: min(420px, 92vw);
+        background: #1B1F25;
+        border: 1px solid #2B3037;
+        border-radius: 8px;
+        padding: 28px 24px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        font-weight: 600;
+      }
+      p, label {
+        color: #c5c9ce;
+        line-height: 1.45;
+      }
+      .modes {
+        display: grid;
+        gap: 10px;
+        margin: 16px 0 20px;
+      }
+      button {
+        background: #FE4023;
+        color: #F3F4F5;
+        border: 0;
+        border-radius: 4px;
+        padding: 8px 14px;
+        cursor: pointer;
+      }
+      .note {
+        color: #9aa0a6;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="starting" class="card">
+      <h1>R1CORD Desktop</h1>
+      <p id="status">Starting the server…</p>
+    </div>
+    <div id="prefs" class="card" hidden>
+      <h1>Desktop preferences</h1>
+      <p>When should R1CORD Desktop start?</p>
+      <form id="prefs-form">
+        <div class="modes">
+          <label><input type="radio" name="startupMode" value="manual" /> Manual — I start it myself</label>
+          <label><input type="radio" name="startupMode" value="plug" /> Start when the R1 is plugged in</label>
+          <label><input type="radio" name="startupMode" value="login" /> Start at login and run in the background</label>
+        </div>
+        <button type="submit">Save</button>
+        <p class="note" id="prefs-note"></p>
+      </form>
+    </div>
+    <script type="module" src="/src/renderer.js"></script>
+  </body>
+</html>

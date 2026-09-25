@@ -1,0 +1,23 @@
+{
+  "files": {
+    "assets/site.4bbedba32077.css": "4bbedba320776bc7ccf1aae369a9cf1178c7f59109eb45e96712b918de171070",
+    "assets/theme.db7469010525.css": "db7469010525d40c5e84c32df3672319cea9084f08d1e2c773a86e7282ef4794",
+    "organized.html": "b2ad9c607c1a12444aaac6e11c4b56928f8e084f94eb62f834623d4778ba09dc",
+    "organized.md": "c7f5e3f61c92e25f164fc5e7c3987c11eebc65e8f1decae7a8d6b60d01eba8f8",
+    "outline.html": "2c8ab80f5b880fc520d68d64437905b1b4d1024c49aad8f3b255809691fc7589",
+    "outline.md": "d6c7126e3475ab1309bcdbc5000067418698ec96a66a43f45e1b077f08863806",
+    "photos/photo-001.jpg": "1f4ba8c58b05a31b76a8ae8385c97f24b45052fa8b71aba4c82590fabcaabbbd",
+    "summary.html": "1511373c02beebe4e5effbfbf596869f4b594d0d2070d18d4f87336863615e0a",
+    "summary.md": "56c37d3f563a7fa3689e2042e167a8bc47c4d0f45acee6f53da153414c44d0c2",
+    "transcript.html": "26614e93b4ab5413beb3232a307308a89b3376b65a35c44fd178e4ecff183b76",
+    "transcript.md": "6cf23e05a0898b591afe5aa6e0cddeb57ef04d4e7250893e2f7aa55dc4402dfe"
+  },
+  "pages": [
+    "transcript",
+    "summary",
+    "outline",
+    "organized"
+  ],
+  "renderer": "r1cord-render/1",
+  "theme": "clean-light"
+}

@@ -1,0 +1,49 @@
+/* R1CORD page chrome shared by every theme. Loaded BEFORE the theme stylesheet, so a theme's
+   own rule of equal specificity wins. Stands in for the inline styles MD DOCS' export uses,
+   which the page's Content-Security-Policy blocks. */
+
+/* Contents entries without children keep the toggle's space but hide the arrow. */
+.toc-toggle.toc-toggle-empty {
+  visibility: hidden;
+}
+
+/* Page navigation (Transcript, Summary, ...): ghost buttons in the theme's own .btn style,
+   the current page underlined. */
+.r1-pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.r1-pages .btn {
+  border-color: transparent;
+}
+.r1-pages .btn[aria-current="page"] {
+  box-shadow: inset 0 -3px 0 currentColor;
+}
+
+/* Download .md and Toggle Theme wrap together, right-aligned, when the header is too narrow. */
+.r1-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: inherit;
+  margin-left: auto;
+}
+
+/* On a phone the page navigation wraps the header to several rows: let it scroll away
+   instead of pinning a third of the screen. */
+@media (max-width: 768px) {
+  body > .site-header {
+    position: static;
+  }
+}
+
+/* Task lists: the disabled checkbox replaces the bullet. */
+.contains-task-list > .task-list-item {
+  list-style-type: none;
+}
+.task-list-item-checkbox {
+  margin: 0 0.5em 0 -1.4em;
+  vertical-align: middle;
+}
