@@ -9,7 +9,8 @@ import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { defaultConfig, loadConfig, saveConfig, withUpdates } = require('../../src/core/config');
-const { createApp } = require('../../src/core/app');
+const { createApp, createApiApp } = require('../../src/core/app');
+const { apiBound } = require('../../src/core/index');
 const { createLogger } = require('../../src/core/log');
 const mailer = require('../../src/core/mailer');
 const desktop = require('../../src/core/desktop');
@@ -41,6 +42,10 @@ class FakeUsb {
 
   pollNow() {
     this.polls += 1;
+  }
+
+  setApiPortSource(fn) {
+    this.apiPortSource = fn;
   }
 
   async stop() {}
@@ -264,6 +269,94 @@ describe('Settings', () => {
     expect(refused.json().error).toBe('invalid_request');
     expect(refused.json().message).toMatch(/invalid asr_device: vulkan/);
     expect(env.app.state.config.asr_device).toBe('cpu');
+  });
+
+  it('refuses an api_port change while /v1 is shared on the tailnet, and saves the rest as before', async () => {
+    const env = await openEnv({ tailscale_serve: true });
+    const refused = await env.request('POST', '/admin/config', {
+      form: settingsForm(env, { api_port: '9001', default_writer: 'none' }),
+    });
+    expect(refused.statusCode).toBe(422);
+    expect(refused.json().error).toBe('invalid_request');
+    expect(refused.json().message).toMatch(/api_port cannot change while \/v1 is shared on the tailnet/);
+    expect(refused.json().message).toMatch(/Setup page/);
+    expect(env.app.state.config.api_port).toBe(8766);
+    expect(env.app.state.config.default_writer).toBe('claude_code'); // nothing saved
+    expect(loadConfig(env.configPath).api_port).toBe(8766);
+
+    const same = await env.request('POST', '/admin/config', { form: settingsForm(env, { api_port: '8766' }) });
+    expect(same.statusCode).toBe(200);
+    expect(same.body).toContain('Saved to config.toml.');
+    expect(env.app.state.config.default_writer).toBe('codex');
+  });
+
+  it('saves an api_port change without Serve and says it waits for a restart until one happens', async () => {
+    const env = await openEnv();
+    env.app.state.apiPort = 8766; // what the API listener bound at start
+    const note = 'Listen host/port changes take effect on restart.';
+    const first = await env.request('POST', '/admin/config', { form: settingsForm(env, { api_port: '9001' }) });
+    expect(first.statusCode).toBe(200);
+    expect(first.body).toContain(note);
+    expect(env.app.state.config.api_port).toBe(9001);
+    expect(loadConfig(env.configPath).api_port).toBe(9001);
+    // Saving again still has the listener on 8766.
+    const again = await env.request('POST', '/admin/config', { form: settingsForm(env, { api_port: '9001' }) });
+    expect(again.body).toContain(note);
+    const plain = await openEnv();
+    plain.app.state.apiPort = 8766;
+    const unchanged = await plain.request('POST', '/admin/config', { form: settingsForm(plain) });
+    expect(unchanged.body).not.toContain(note);
+  });
+});
+
+describe('API listener start', () => {
+  async function listening(env) {
+    const api = createApiApp(env.app.state);
+    cleanup.push(() => api.close());
+    await api.listen({ host: '127.0.0.1', port: 0 });
+    return api;
+  }
+
+  function fakeTailscale({ fail = null } = {}) {
+    const calls = [];
+    return {
+      calls,
+      async enableServe(port) {
+        calls.push(port);
+        if (fail) throw new Error(fail);
+      },
+    };
+  }
+
+  it('points the USB reverse at the bound port, not at a later config-only api_port', async () => {
+    const env = await openEnv();
+    const api = await listening(env);
+    const port = api.server.address().port;
+    const tailscale = fakeTailscale();
+    await expect(apiBound(env.app.state, api, { tailscale })).resolves.toBe(false);
+    expect(env.app.state.apiPort).toBe(port);
+    expect(env.app.state.apiApp).toBe(api);
+    expect(env.usb.apiPortSource()).toBe(port);
+    env.app.state.config = withUpdates(env.app.state.config, { api_port: port === 9001 ? 9002 : 9001 });
+    expect(env.usb.apiPortSource()).toBe(port);
+    expect(tailscale.calls).toEqual([]); // Serve is off
+  });
+
+  it('re-applies Tailscale Serve to the bound port when it is on', async () => {
+    const env = await openEnv({ tailscale_serve: true });
+    const api = await listening(env);
+    const tailscale = fakeTailscale();
+    await expect(apiBound(env.app.state, api, { tailscale })).resolves.toBe(true);
+    expect(tailscale.calls).toEqual([api.server.address().port]);
+  });
+
+  it('logs a Serve failure and goes on', async () => {
+    const env = await openEnv({ tailscale_serve: true });
+    const api = await listening(env);
+    const tailscale = fakeTailscale({ fail: 'Tailscale is not installed on this PC' });
+    await expect(apiBound(env.app.state, api, { tailscale })).resolves.toBe(false);
+    expect(env.app.state.apiPort).toBe(api.server.address().port);
+    expect(env.lines.some((line) => line.includes('WARNING') && line.includes('could not re-apply Serve') && line.includes('not installed'))).toBe(true);
   });
 });
 

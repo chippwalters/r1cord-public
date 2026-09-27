@@ -1,7 +1,9 @@
-// Fastify application factory. Used by index.js and by Vitest.
+// Fastify application factories. Used by index.js and by Vitest.
 // Port of r1cord_server/app.py: recover interrupted jobs, Cache-Control, JSON errors. The worker
 // and the USB watcher always exist (the admin reads their state); noWorker / noUsb only keep them
 // from starting, as R1CORD_NO_WORKER / R1CORD_NO_USB do in Python.
+// createApp builds the admin listener (admin, /static, /v1); createApiApp builds the API-only
+// listener (/v1 alone) that USB reverse and Tailscale Serve point at, sharing the admin app's state.
 
 'use strict';
 
@@ -15,6 +17,9 @@ const { setupFileLogger, logHandled, requestPath } = require('./log');
 const { HttpError } = require('./http-error');
 const { registerApi } = require('./api');
 const { registerAdmin } = require('./admin/routes');
+const { registerUpdateRoutes } = require('./admin/update-routes');
+const { registerSetupRoutes } = require('./admin/setup-routes');
+const { startUpdateChecks } = require('./updates');
 const { sendFile } = require('./admin/send-file');
 const defaultMailer = require('./mailer');
 const { UsbWatcher } = require('./usb');
@@ -41,6 +46,100 @@ function sendJsonError(request, reply, statusCode, error, message, extra, header
     for (const [key, value] of Object.entries(headers)) reply.header(key, value);
   }
   return reply.code(statusCode).send({ error, message, ...extra });
+}
+
+function newFastify() {
+  return Fastify({
+    logger: false,
+    trustProxy: false,
+    bodyLimit: 1024 * 1024,
+    requestTimeout: 0,
+    connectionTimeout: 0,
+    exposeHeadRoutes: true,
+    routerOptions: {
+      ignoreTrailingSlash: false,
+      caseSensitive: true,
+      maxParamLength: 512,
+    },
+  });
+}
+
+/** Body parsing, activity stamp, Cache-Control, JSON 404/405 and error mapping: identical on both listeners. */
+function installCommon(app, state) {
+  const { app: appLog, api: apiLog } = state.loggers;
+  app.decorate('state', state);
+
+  app.addContentTypeParser('*', (request, payload, done) => {
+    done(null, payload);
+  });
+
+  app.addHook('onRequest', (request, _reply, done) => {
+    const at = monotonicSeconds();
+    request.server.state.lastActivity = at;
+    request.server.state.last_activity = at;
+    done();
+  });
+
+  app.addHook('onSend', (request, reply, payload, done) => {
+    reply.header('Cache-Control', 'no-store');
+    done(null, payload);
+  });
+
+  app.setNotFoundHandler((request, reply) => {
+    const pathname = requestPath(request);
+    const allowed = METHODS.filter(
+      (method) => method !== request.method && app.hasRoute({ method, url: pathname }),
+    );
+    if (allowed.length) {
+      reply.header('allow', allowed.join(', '));
+      logHandled(appLog, request, 405, 'http_error');
+      return sendJsonError(request, reply, 405, 'http_error', 'Method Not Allowed', {});
+    }
+    logHandled(appLog, request, 404, 'not_found');
+    return sendJsonError(request, reply, 404, 'not_found', 'Not Found', {});
+  });
+
+  app.setErrorHandler((error, request, reply) => {
+    if (reply.sent) return;
+    if (error instanceof HttpError) {
+      logHandled(appLog, request, error.statusCode, error.error, error.message);
+      if (typeof error.html === 'string') {
+        if (error.headers) {
+          for (const [key, value] of Object.entries(error.headers)) reply.header(key, value);
+        }
+        return reply.code(error.statusCode).type('text/html; charset=utf-8').send(error.html);
+      }
+      return sendJsonError(request, reply, error.statusCode, error.error, error.message, error.extra, error.headers);
+    }
+    const code = error && error.code;
+    if (code === 'FST_ERR_CTP_INVALID_JSON_BODY' || code === 'FST_ERR_CTP_EMPTY_JSON_BODY') {
+      logHandled(appLog, request, 422, 'invalid_request');
+      return sendJsonError(request, reply, 422, 'invalid_request', 'JSON decode error', {});
+    }
+    if (code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE' || error.statusCode === 415) {
+      logHandled(appLog, request, 415, 'http_error', 'Unsupported Media Type');
+      return sendJsonError(request, reply, 415, 'http_error', 'Unsupported Media Type', {});
+    }
+    if (error.statusCode === 405) {
+      logHandled(appLog, request, 405, 'http_error');
+      return sendJsonError(request, reply, 405, 'http_error', 'Method Not Allowed', {});
+    }
+    const where = `${request.method} ${requestPath(request)}`;
+    apiLog.warning(`${where} -> 500 internal_error | ${error.name}: ${error.message}`, error);
+    return sendJsonError(request, reply, 500, 'internal_error', 'unexpected server error', {});
+  });
+}
+
+/**
+ * The API-only listener: /v1 (with the setup nonce route) and nothing else — no admin, no
+ * /static. It shares `state` (store, config, worker, usb) with the admin app built by createApp;
+ * closing it never stops the worker or the USB watcher and never closes the store.
+ */
+function createApiApp(state) {
+  const app = newFastify();
+  installCommon(app, state);
+  registerApi(app);
+  return app;
 }
 
 function createApp(config, options = {}) {
@@ -119,41 +218,14 @@ function buildApp(config, options, { configPath, promptsDir, logger, appLog, api
     configDir: state.configDir,
   });
 
-  const app = Fastify({
-    logger: false,
-    trustProxy: false,
-    bodyLimit: 1024 * 1024,
-    requestTimeout: 0,
-    connectionTimeout: 0,
-    exposeHeadRoutes: true,
-    routerOptions: {
-      ignoreTrailingSlash: false,
-      caseSensitive: true,
-      maxParamLength: 512,
-    },
-  });
-
+  const app = newFastify();
   const usb = state.usb;
-  app.decorate('state', state);
-
-  app.addContentTypeParser('*', (request, payload, done) => {
-    done(null, payload);
-  });
-
-  app.addHook('onRequest', (request, _reply, done) => {
-    const at = monotonicSeconds();
-    request.server.state.lastActivity = at;
-    request.server.state.last_activity = at;
-    done();
-  });
-
-  app.addHook('onSend', (request, reply, payload, done) => {
-    reply.header('Cache-Control', 'no-store');
-    done(null, payload);
-  });
+  installCommon(app, state);
 
   registerApi(app);
   registerAdmin(app);
+  registerUpdateRoutes(app);
+  registerSetupRoutes(app);
 
   if (fs.existsSync(STATIC_ROOT)) {
     app.get('/static/*', async (request, reply) => {
@@ -175,52 +247,14 @@ function buildApp(config, options, { configPath, promptsDir, logger, appLog, api
     });
   }
 
-  app.setNotFoundHandler((request, reply) => {
-    const pathname = requestPath(request);
-    const allowed = METHODS.filter(
-      (method) => method !== request.method && app.hasRoute({ method, url: pathname }),
-    );
-    if (allowed.length) {
-      reply.header('allow', allowed.join(', '));
-      logHandled(appLog, request, 405, 'http_error');
-      return sendJsonError(request, reply, 405, 'http_error', 'Method Not Allowed', {});
-    }
-    logHandled(appLog, request, 404, 'not_found');
-    return sendJsonError(request, reply, 404, 'not_found', 'Not Found', {});
-  });
-
-  app.setErrorHandler((error, request, reply) => {
-    if (reply.sent) return;
-    if (error instanceof HttpError) {
-      logHandled(appLog, request, error.statusCode, error.error, error.message);
-      if (typeof error.html === 'string') {
-        if (error.headers) {
-          for (const [key, value] of Object.entries(error.headers)) reply.header(key, value);
-        }
-        return reply.code(error.statusCode).type('text/html; charset=utf-8').send(error.html);
-      }
-      return sendJsonError(request, reply, error.statusCode, error.error, error.message, error.extra, error.headers);
-    }
-    const code = error && error.code;
-    if (code === 'FST_ERR_CTP_INVALID_JSON_BODY' || code === 'FST_ERR_CTP_EMPTY_JSON_BODY') {
-      logHandled(appLog, request, 422, 'invalid_request');
-      return sendJsonError(request, reply, 422, 'invalid_request', 'JSON decode error', {});
-    }
-    if (code === 'FST_ERR_CTP_INVALID_MEDIA_TYPE' || error.statusCode === 415) {
-      logHandled(appLog, request, 415, 'http_error', 'Unsupported Media Type');
-      return sendJsonError(request, reply, 415, 'http_error', 'Unsupported Media Type', {});
-    }
-    if (error.statusCode === 405) {
-      logHandled(appLog, request, 405, 'http_error');
-      return sendJsonError(request, reply, 405, 'http_error', 'Method Not Allowed', {});
-    }
-    const logger = apiLog;
-    const where = `${request.method} ${requestPath(request)}`;
-    logger.warning(`${where} -> 500 internal_error | ${error.name}: ${error.message}`, error);
-    return sendJsonError(request, reply, 500, 'internal_error', 'unexpected server error', {});
-  });
+  let stopUpdates = null;
 
   app.addHook('onClose', async () => {
+    try {
+      if (stopUpdates) stopUpdates();
+    } catch (_error) {
+      // shutdown must finish
+    }
     try {
       if (state.modelDownload && typeof state.modelDownload.cancel === 'function') state.modelDownload.cancel();
       if (state.platformTools && typeof state.platformTools.cancel === 'function') state.platformTools.cancel();
@@ -250,10 +284,13 @@ function buildApp(config, options, { configPath, promptsDir, logger, appLog, api
     state.lock = null;
   });
 
-  if (!noWorker) worker.start();
+  if (!noWorker) {
+    worker.start();
+    stopUpdates = startUpdateChecks(state);
+  }
   if (!noUsb) usb.start();
 
   return app;
 }
 
-module.exports = { createApp, activityAt, monotonicSeconds };
+module.exports = { createApp, createApiApp, activityAt, monotonicSeconds };

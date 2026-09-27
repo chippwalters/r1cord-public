@@ -9,6 +9,7 @@ import path from 'node:path';
 const require = createRequire(import.meta.url);
 const { defaultConfig, withUpdates } = require('../../src/core/config');
 const { createApp } = require('../../src/core/app');
+const { NONCE_TTL_MS, createNonce, markSeen, consumeSeen } = require('../../src/core/setup-nonce');
 const { createLogger } = require('../../src/core/log');
 
 const AUDIO = Buffer.from('0123456789');
@@ -273,5 +274,112 @@ describe('/v1', () => {
       headers: auth(token),
     });
     expect(committed.statusCode).toBe(200);
+  });
+});
+
+function postPair(app, code) {
+  return app.inject({
+    method: 'POST',
+    url: '/v1/pair',
+    headers: { 'content-type': 'application/json' },
+    payload: { code },
+  });
+}
+
+async function adminPairCode(app) {
+  const page = await app.inject({ method: 'POST', url: '/admin/pair', remoteAddress: '127.0.0.1' });
+  expect(page.statusCode).toBe(200);
+  return String(page.body).match(/class="code">(\d{6})</)[1];
+}
+
+function wrongCode(good, index) {
+  const code = String(index).padStart(6, '9');
+  return code === good ? '888888' : code;
+}
+
+describe('/v1/pair brute-force lock', () => {
+  it('still pairs with the right code after four wrong ones', async () => {
+    const app = await openApp(cfg(tmpPath()));
+    const good = await adminPairCode(app);
+    for (let i = 0; i < 4; i += 1) expect((await postPair(app, wrongCode(good, i))).statusCode).toBe(400);
+    const res = await postPair(app, good);
+    expect(res.statusCode).toBe(200);
+    expect(res.json().token).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('answers 429 to every pair request after five wrong codes until a new code is created', async () => {
+    const app = await openApp(cfg(tmpPath()));
+    const good = await adminPairCode(app);
+    for (let i = 0; i < 5; i += 1) {
+      const res = await postPair(app, wrongCode(good, i));
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error).toBe('invalid_code');
+    }
+
+    const locked = await postPair(app, good);
+    expect(locked.statusCode).toBe(429);
+    expect(locked.json().error).toBe('pairing_locked');
+    const malformed = await app.inject({
+      method: 'POST',
+      url: '/v1/pair',
+      headers: { 'content-type': 'application/json' },
+      payload: {},
+    });
+    expect(malformed.statusCode).toBe(429);
+
+    const fresh = await adminPairCode(app);
+    const paired = await postPair(app, fresh);
+    expect(paired.statusCode).toBe(200);
+    // The code that was valid during the lock was never consumed by the refused attempt.
+    expect((await postPair(app, good)).statusCode).toBe(200);
+  });
+});
+
+describe('/v1/setup/nonce', () => {
+  it('needs the bearer token, answers 204 once and records the presenting peer', async () => {
+    const app = await openApp(cfg(tmpPath()));
+    const token = app.state.store.issueDeviceToken('usb:TESTSERIAL');
+    const nonce = createNonce(app.state);
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/);
+    const url = `/v1/setup/nonce/${nonce}`;
+
+    const anonymous = await app.inject({ method: 'GET', url, headers: { 'x-forwarded-for': '100.64.0.9' } });
+    expect(anonymous.statusCode).toBe(401);
+    expect(consumeSeen(app.state, nonce)).toBeNull(); // an unauthenticated request records nothing
+
+    const seen = await app.inject({ method: 'GET', url, headers: { ...auth(token), 'x-forwarded-for': '100.64.0.7' } });
+    expect(seen.statusCode).toBe(204);
+    expect(seen.body).toBe('');
+
+    const again = await app.inject({ method: 'GET', url, headers: { ...auth(token), 'x-forwarded-for': '100.64.0.8' } });
+    expect(again.statusCode).toBe(404);
+    expect(again.json().error).toBe('not_found');
+
+    expect(consumeSeen(app.state, nonce)).toEqual({ forwardedFor: '100.64.0.7', remote: '127.0.0.1' });
+    expect(consumeSeen(app.state, nonce)).toBeNull(); // one use
+  });
+
+  it('records a null forwardedFor for a direct request and 404s unknown or malformed nonces', async () => {
+    const app = await openApp(cfg(tmpPath()));
+    const token = app.state.store.issueDeviceToken('usb:TESTSERIAL');
+    const nonce = createNonce(app.state);
+    expect((await app.inject({ method: 'GET', url: `/v1/setup/nonce/${nonce}`, headers: auth(token) })).statusCode).toBe(204);
+    expect(consumeSeen(app.state, nonce)).toEqual({ forwardedFor: null, remote: '127.0.0.1' });
+
+    for (const bad of ['0'.repeat(32), nonce.toUpperCase(), 'not-a-nonce']) {
+      const res = await app.inject({ method: 'GET', url: `/v1/setup/nonce/${bad}`, headers: auth(token) });
+      expect(res.statusCode).toBe(404);
+    }
+  });
+
+  it('expires nonces five minutes after creation, seen or not', () => {
+    const state = {};
+    const unseen = createNonce(state, 1_000);
+    expect(markSeen(state, unseen, { forwardedFor: null, remote: '127.0.0.1' }, 1_000 + NONCE_TTL_MS)).toBe(false);
+    expect(consumeSeen(state, unseen, 1_000 + NONCE_TTL_MS)).toBeNull();
+
+    const seen = createNonce(state, 1_000);
+    expect(markSeen(state, seen, { forwardedFor: null, remote: '127.0.0.1' }, 1_000 + NONCE_TTL_MS - 1)).toBe(true);
+    expect(consumeSeen(state, seen, 1_000 + NONCE_TTL_MS)).toBeNull();
   });
 });

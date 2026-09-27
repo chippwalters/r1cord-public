@@ -5,6 +5,12 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.chippwalters.r1cord.model.REVIEW_KINDS
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+
+/** Whether the device holds a pairing token, and the paired desktop's display name. */
+data class PairingSnapshot(val paired: Boolean, val serverName: String)
 
 /**
  * Desktop-server preferences. Plain keys share "app_preferences" with RecorderSettings;
@@ -22,7 +28,19 @@ object OffloadSettings {
     private const val LEGACY_SUMMARIZE = "offload_default_summarize"
     private const val LEGACY_STYLE = "offload_default_style"
 
-    @Volatile private var securePrefs: SharedPreferences? = null
+    /** Tests preset a plain SharedPreferences here: Robolectric has no AndroidKeyStore. */
+    @Volatile internal var securePrefs: SharedPreferences? = null
+    private val pairingState = MutableStateFlow(PairingSnapshot(paired = false, serverName = ""))
+
+    /**
+     * Process-wide pairing state. Every writer (in-app pairing, unpairing, USB provisioning on
+     * a binder thread) republishes it, so observers see pairings they did not initiate.
+     * Each call re-reads the stored values first, so the returned value is current.
+     */
+    fun pairing(context: Context): StateFlow<PairingSnapshot> {
+        publishPairing(context)
+        return pairingState.asStateFlow()
+    }
 
     fun serverUrl(context: Context): String = prefs(context).getString(KEY_SERVER_URL, "") ?: ""
 
@@ -56,19 +74,54 @@ object OffloadSettings {
 
     fun setServerName(context: Context, name: String) {
         prefs(context).edit().putString(KEY_SERVER_NAME, name).apply()
+        publishPairing(context)
     }
 
     fun token(context: Context): String? = secure(context).getString(KEY_TOKEN, null)?.takeIf { it.isNotBlank() }
 
     fun setToken(context: Context, token: String) {
         secure(context).edit().putString(KEY_TOKEN, token).apply()
+        publishPairing(context)
     }
 
     fun clearToken(context: Context) {
         secure(context).edit().remove(KEY_TOKEN).apply()
+        publishPairing(context)
     }
 
     fun isPaired(context: Context): Boolean = token(context) != null
+
+    /**
+     * Pairs with a desktop in one step (USB setup): server URL, server name and token change
+     * together. Written synchronously; if the URL/name write fails the previous token is restored,
+     * so a half-applied pairing never pairs the old server with the new token. Throws on failure.
+     */
+    fun provision(context: Context, serverUrl: String, serverName: String, token: String) {
+        require(token.isNotBlank()) { "Token is required." }
+        val secure = secure(context)
+        val previous = secure.getString(KEY_TOKEN, null)
+        check(secure.edit().putString(KEY_TOKEN, token).commit()) { "Could not save the pairing token." }
+        val saved = prefs(context).edit()
+            .putString(KEY_SERVER_URL, serverUrl.trim())
+            .putString(KEY_SERVER_NAME, serverName)
+            .commit()
+        if (!saved) {
+            secure.edit().apply { if (previous == null) remove(KEY_TOKEN) else putString(KEY_TOKEN, previous) }.commit()
+            error("Could not save the server settings.")
+        }
+        publishPairing(context)
+    }
+
+    /**
+     * Re-reads the stored pairing and publishes it. Read and publish happen under one lock, so
+     * concurrent writers (UI thread, binder thread) can never leave an older snapshot published
+     * after a newer one: the last publisher reads after every earlier write.
+     */
+    private fun publishPairing(context: Context) {
+        synchronized(pairingState) {
+            pairingState.value = PairingSnapshot(paired = isPaired(context), serverName = serverName(context))
+        }
+    }
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)

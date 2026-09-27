@@ -2,6 +2,7 @@ package com.chippwalters.r1cord.sync
 
 import com.chippwalters.r1cord.model.PublishedPage
 import java.io.ByteArrayInputStream
+import java.net.InetAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
@@ -9,6 +10,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import okhttp3.Dns
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -26,11 +28,18 @@ import org.junit.Test
 /**
  * The offload protocol as the client sees it, against a MockWebServer on loopback. The
  * constructor seams replace OffloadSettings (EncryptedSharedPreferences) and the network
- * capability check so no Android keystore or radio is involved.
+ * snapshot / USB probe so no Android keystore or radio is involved.
  */
 class OffloadClientTest {
     private lateinit var server: MockWebServer
     private val base: String get() = server.url("/").toString().trimEnd('/')
+
+    /** Scripted network, read on every request so a test can change it mid-upload. */
+    private var net = ONLINE
+    private var usbUp = true
+    /** Scripted configured-server probe; every probed URL is recorded. */
+    private var serverUp = true
+    private val probedServers = mutableListOf<String>()
 
     private val job = JobRequest(
         recordingId = "rec-1",
@@ -55,14 +64,31 @@ class OffloadClientTest {
     private fun client(
         url: String = base,
         token: String? = "tok-1",
-        network: Boolean = true,
         usbUrl: String = "http://127.0.0.1:8765",
+        serverUrl: () -> String = { url },
     ) = OffloadClient(
-        serverUrl = { url },
+        serverUrl = serverUrl,
         token = { token },
-        hasValidatedNetwork = { network },
+        routes = SnapshotRoutes(net = { net }, usb = { usbUp }, configured = { probedServers += it; serverUp }),
         usbUrl = usbUrl,
+        dns = tailnetOnLoopback,
     )
+
+    /** Resolves every `*.ts.net` name to the MockWebServer's address, so tailnet URLs run offline. */
+    private val tailnetOnLoopback = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> =
+            Dns.SYSTEM.lookup(if (hostname.endsWith(".ts.net")) server.hostName else hostname)
+    }
+
+    private fun withUsbServer(block: (usb: MockWebServer, usbUrl: String) -> Unit) {
+        val usb = MockWebServer()
+        usb.start()
+        try {
+            block(usb, usb.url("/").toString().trimEnd('/'))
+        } finally {
+            usb.shutdown()
+        }
+    }
 
     private fun ok(body: String) =
         MockResponse().setResponseCode(200).setHeader("Content-Type", "application/json").setBody(body)
@@ -360,32 +386,50 @@ class OffloadClientTest {
     // ---- route selection and URL validation ----
 
     @Test
-    fun validatedNetworkSendsToConfiguredUrlAndFallbackSendsToUsbBase() {
-        val usb = MockWebServer()
-        usb.start()
-        try {
-            server.enqueue(ok("""{"received":0}"""))
-            usb.enqueue(ok("""{"received":0}"""))
-            val wifi = client()
-            assertFalse(wifi.usingUsb())
-            runBlocking { wifi.received("job-1", "audio.m4a") }
-            assertEquals("/v1/jobs/job-1/files/audio.m4a/received", server.takeRequest().path)
+    fun validatedNetworkSendsToConfiguredUrlAndFallbackSendsToUsbBase() = withUsbServer { usb, usbUrl ->
+        server.enqueue(ok("""{"received":0}"""))
+        usb.enqueue(ok("""{"received":0}"""))
+        val wifi = client(usbUrl = usbUrl)
+        assertFalse(wifi.usingUsb())
+        runBlocking { wifi.received("job-1", "audio.m4a") }
+        assertEquals("/v1/jobs/job-1/files/audio.m4a/received", server.takeRequest().path)
 
-            val cable = client(url = "https://r1cord.example.com", network = false, usbUrl = usb.url("/").toString().trimEnd('/'))
-            assertTrue(cable.usingUsb())
-            runBlocking { cable.received("job-1", "audio.m4a") }
-            assertEquals("/v1/jobs/job-1/files/audio.m4a/received", usb.takeRequest().path)
-        } finally {
-            usb.shutdown()
-        }
+        net = OFFLINE
+        val cable = client(url = "https://r1cord.example.com", usbUrl = usbUrl)
+        assertTrue(cable.usingUsb())
+        runBlocking { cable.received("job-1", "audio.m4a") }
+        assertEquals("/v1/jobs/job-1/files/audio.m4a/received", usb.takeRequest().path)
     }
 
     @Test
-    fun emptyServerUrlFailsBeforeAnyRequest() {
+    fun blankServerUrlMeansUsbOnlyEvenWithInternet() = withUsbServer { usb, usbUrl ->
+        usb.enqueue(ok("""{"received":5}"""))
+        val cable = client(url = "", usbUrl = usbUrl)
+        assertTrue(cable.usingUsb())
+        assertEquals(5L, runBlocking { cable.received("job-1", "audio.m4a") })
+        assertEquals(1, usb.requestCount)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun tailnetUrlWithVpnDownAndNoUsbExplainsTailscaleIsOff() {
+        net = NetSnapshot(vpnUp = false, nonVpnValidatedInternet = true)
+        usbUp = false
         val failure = assertFailsWith<OffloadException> {
-            runBlocking { client(url = "").received("job-1", "audio.m4a") }
+            runBlocking { client(url = "https://desktop.example.ts.net").createJob(job, "{}") }
         }
-        assertEquals("Set the server URL in Settings.", failure.message)
+        assertEquals(TAILSCALE_OFF, failure.message)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun customUrlWithNoNetworkAndNoUsbKeepsNoRouteMessage() {
+        net = OFFLINE
+        usbUp = false
+        val failure = assertFailsWith<OffloadException> {
+            runBlocking { client().recordings() }
+        }
+        assertEquals(OffloadClient.NO_ROUTE, failure.message)
         assertEquals(0, server.requestCount)
     }
 
@@ -407,12 +451,120 @@ class OffloadClientTest {
         assertEquals(0, server.requestCount)
     }
 
+    // ---- route pinning per job ----
+
+    @Test
+    fun aJobCreatedOverUsbStaysOnUsbWhenWifiComesBack() = withUsbServer { usb, usbUrl ->
+        net = OFFLINE
+        usb.enqueue(ok("""{"jobId":"job-1"}"""))
+        usb.enqueue(ok("""{"received":0}"""))
+        usb.enqueue(ok("""{"jobId":"job-1","status":"queued"}"""))
+        val client = client(usbUrl = usbUrl)
+        runBlocking { client.createJob(job, "{}") }
+
+        net = ONLINE
+        runBlocking {
+            client.received("job-1", "audio.m4a")
+            client.commit("job-1")
+        }
+        assertEquals(3, usb.requestCount)
+        assertEquals("the configured server must not see a job it never created", 0, server.requestCount)
+    }
+
+    @Test
+    fun aResumedJobIsPinnedToTheRouteThatAnsweredJobActive() = withUsbServer { usb, usbUrl ->
+        net = OFFLINE
+        usb.enqueue(error(409, """{"error":"job_active","jobId":"job-9"}"""))
+        usb.enqueue(ok("""{"received":3}"""))
+        val client = client(usbUrl = usbUrl)
+        assertEquals("job-9", runBlocking { client.createJob(job, "{}") }.jobId)
+        net = ONLINE
+        assertEquals(3L, runBlocking { client.received("job-9", "audio.m4a") })
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun losingThePinnedRouteFailsInsteadOfSwitchingServers() = withUsbServer { usb, usbUrl ->
+        server.enqueue(ok("""{"jobId":"job-1"}"""))
+        val client = client(usbUrl = usbUrl)
+        runBlocking { client.createJob(job, "{}") }
+
+        net = OFFLINE // Wi-Fi dropped; the USB reverse is up, but it is not the job's route
+        val failure = assertFailsWith<OffloadException> {
+            runBlocking { client.putChunk("job-1", "audio.m4a", 0, { ByteArrayInputStream(ByteArray(1)) }, 1) }
+        }
+        assertEquals(OffloadClient.ROUTE_CHANGED, failure.code)
+        assertEquals("The network connection to the desktop was lost during this upload. Send again to resume.", failure.message)
+        assertEquals(0, usb.requestCount)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun losingThePinnedUsbCableFailsWithAUsbMessage() = withUsbServer { usb, usbUrl ->
+        net = OFFLINE
+        usb.enqueue(ok("""{"jobId":"job-1"}"""))
+        val client = client(usbUrl = usbUrl)
+        runBlocking { client.createJob(job, "{}") }
+
+        usbUp = false
+        net = ONLINE
+        val failure = assertFailsWith<OffloadException> { runBlocking { client.commit("job-1") } }
+        assertEquals(OffloadClient.ROUTE_CHANGED, failure.code)
+        assertTrue(failure.message!!.startsWith("The USB connection to the desktop was lost"))
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun changingTheServerUrlMidJobFailsAndANewAttemptRedecides() {
+        var configured = base
+        server.enqueue(ok("""{"jobId":"job-1"}"""))
+        server.enqueue(ok("""{"received":0}"""))
+        server.enqueue(ok("""{"jobId":"job-1"}"""))
+        server.enqueue(ok("""{"received":0}"""))
+        val client = client(serverUrl = { configured })
+        runBlocking { client.createJob(job, "{}") }
+
+        configured = "$base/" // a trailing slash is the same server
+        runBlocking { client.received("job-1", "audio.m4a") }
+
+        configured = "$base/moved"
+        val failure = assertFailsWith<OffloadException> { runBlocking { client.received("job-1", "audio.m4a") } }
+        assertEquals(OffloadClient.ROUTE_CHANGED, failure.code)
+        assertEquals("Server settings changed during this upload. Send again.", failure.message)
+        assertEquals(2, server.requestCount)
+
+        runBlocking {
+            client.createJob(job, "{}")
+            client.received("job-1", "audio.m4a")
+        }
+        server.takeRequest()
+        server.takeRequest()
+        assertEquals("/moved/v1/jobs", server.takeRequest().path)
+        assertEquals("/moved/v1/jobs/job-1/files/audio.m4a/received", server.takeRequest().path)
+    }
+
+    // ---- setup nonce ----
+
+    @Test
+    fun setupNonceGetsTheNoncePathWithTheBearerAndReturnsTheStatus() {
+        server.enqueue(MockResponse().setResponseCode(204))
+        server.enqueue(MockResponse().setResponseCode(404))
+        val nonce = "0123456789abcdef0123456789abcdef"
+        assertEquals(204, runBlocking { client().setupNonce(nonce) })
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/v1/setup/nonce/$nonce", request.path)
+        assertEquals("Bearer tok-1", request.getHeader("Authorization"))
+        assertEquals(404, runBlocking { client().setupNonce(nonce) })
+    }
+
     // ---- connection failures ----
 
     @Test
     fun connectionFailureOnUsbBaseKeepsNoRouteMessage() {
+        net = OFFLINE
         val failure = assertFailsWith<OffloadException> {
-            runBlocking { client(network = false, usbUrl = "http://127.0.0.1:1").received("job-1", "audio.m4a") }
+            runBlocking { client(usbUrl = "http://127.0.0.1:1").received("job-1", "audio.m4a") }
         }
         assertEquals(OffloadClient.NO_ROUTE, failure.message)
         assertNull(failure.code)
@@ -425,9 +577,67 @@ class OffloadClientTest {
         }
         assertEquals("server_unreachable", failure.code)
         assertEquals(
-            "Desktop server is not reachable at 127.0.0.1. Check that the server and its tunnel are running.",
+            "Desktop server is not reachable at 127.0.0.1. Check that R1CORD Desktop is running, " +
+                "and that Tailscale is on for this R1 and the PC.",
             failure.message,
         )
+    }
+
+    @Test
+    fun tailnetDesktopDownWithoutUsbStillNamesTheTailnetHost() {
+        net = VPN_UP
+        usbUp = false
+        serverUp = false
+        val failure = assertFailsWith<OffloadException> {
+            runBlocking { client(url = "http://desktop.example.ts.net:1").createJob(job, "{}") }
+        }
+        assertEquals(OffloadClient.SERVER_UNREACHABLE, failure.code)
+        assertEquals(
+            "Desktop server is not reachable at desktop.example.ts.net. Check that R1CORD Desktop is running, " +
+                "and that Tailscale is on for this R1 and the PC.",
+            failure.message,
+        )
+        assertTrue("with no USB to fall back to, the desktop is not probed first", probedServers.isEmpty())
+    }
+
+    // ---- tailnet server vs. USB fallback ----
+
+    @Test
+    fun tailnetUpButDesktopDownWithUsbPresentSendsTheJobOverUsbAndKeepsItThere() = withUsbServer { usb, usbUrl ->
+        net = VPN_UP
+        serverUp = false
+        val tailnet = "http://desktop.example.ts.net:${server.port}"
+        usb.enqueue(ok("""{"jobId":"job-1"}"""))
+        usb.enqueue(ok("""{"received":0}"""))
+        usb.enqueue(ok("""{"jobId":"job-1","status":"queued"}"""))
+        val client = client(url = tailnet, usbUrl = usbUrl)
+        assertEquals("job-1", runBlocking { client.createJob(job, "{}") }.jobId)
+
+        serverUp = true // the PC's Tailscale comes back mid-upload; the job stays on USB
+        runBlocking {
+            client.received("job-1", "audio.m4a")
+            client.commit("job-1")
+        }
+        assertEquals(3, usb.requestCount)
+        assertEquals(0, server.requestCount)
+        assertEquals("only the new job's route decision probes the desktop", listOf(tailnet), probedServers)
+    }
+
+    @Test
+    fun tailnetDesktopReachableWithUsbPresentSendsTheJobOverTheTailnetAndKeepsItThere() = withUsbServer { usb, usbUrl ->
+        net = VPN_UP
+        serverUp = true
+        server.enqueue(ok("""{"jobId":"job-1"}"""))
+        server.enqueue(ok("""{"received":0}"""))
+        val client = client(url = "http://desktop.example.ts.net:${server.port}", usbUrl = usbUrl)
+        assertFalse(client.usingUsb())
+        runBlocking { client.createJob(job, "{}") }
+
+        serverUp = false // a later probe would pick USB, but the job is pinned to the tailnet
+        runBlocking { client.received("job-1", "audio.m4a") }
+        assertEquals(2, server.requestCount)
+        assertEquals(0, usb.requestCount)
+        assertTrue(client.usingUsb())
     }
 
     // ---- cancellation ----
@@ -451,6 +661,12 @@ class OffloadClientTest {
             assertFailsWith<CancellationException> { deferred.await() }
         }
         release.countDown()
+    }
+
+    private companion object {
+        val ONLINE = NetSnapshot(vpnUp = false, nonVpnValidatedInternet = true)
+        val OFFLINE = NetSnapshot(vpnUp = false, nonVpnValidatedInternet = false)
+        val VPN_UP = NetSnapshot(vpnUp = true, nonVpnValidatedInternet = true)
     }
 }
 

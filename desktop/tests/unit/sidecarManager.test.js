@@ -6,10 +6,18 @@ const { SidecarManager, nextBackoff, redactSecrets } = require('../../src/main/s
 
 function fakeChild() {
   const handlers = {};
+  const stderrHandlers = [];
   return {
     pid: 4242,
     stdout: { on() {} },
-    stderr: { on() {} },
+    stderr: {
+      on(event, fn) {
+        if (event === 'data') stderrHandlers.push(fn);
+      },
+    },
+    emitStderr(text) {
+      stderrHandlers.forEach((fn) => fn(Buffer.from(text)));
+    },
     on(event, fn) {
       (handlers[event] ||= []).push(fn);
     },
@@ -39,6 +47,111 @@ const echoer = {
     buildEnv: () => ({ R1CORD_NO_TRAY: '1' }),
   },
 };
+
+// Backoff waits (>= 500 ms here) never end on their own; the 200 ms probe interval does.
+function stuckBackoffDelay(ms) {
+  return ms >= 500 ? new Promise(() => {}) : Promise.resolve();
+}
+
+function crashingManager() {
+  const children = [];
+  const spawnImpl = vi.fn(() => {
+    const child = fakeChild();
+    children.push(child);
+    return child;
+  });
+  const manager = new SidecarManager({
+    descriptors: echoer,
+    spawnImpl,
+    delay: stuckBackoffDelay,
+    // An unanswered probe: the test drives start and failure through the child alone.
+    fetchImpl: () => new Promise(() => {}),
+    killTreeImpl: () => {},
+  });
+  return { manager, children, spawnImpl };
+}
+
+const LISTEN_ERROR = [
+  'Error: listen address 127.0.0.1:8765 is already in use; another R1CORD server or core is bound to this port',
+  '    at listenError (D:\\app\\src\\core\\index.js:70:19)',
+  '    at main (D:\\app\\src\\core\\index.js:162:11)',
+].join('\n');
+
+describe('SidecarManager start failures', () => {
+  it('becomes ready on the ready message while a readiness probe is still unanswered', async () => {
+    const child = fakeChild();
+    const manager = new SidecarManager({
+      descriptors: echoer,
+      spawnImpl: () => child,
+      delay: stuckBackoffDelay,
+      // The probe hangs, as a request to a core that is still booting can.
+      fetchImpl: () => new Promise(() => {}),
+    });
+    const ready = new Promise((resolve) => {
+      manager.supervise('echoer', { port: 8775 }, {
+        probeUrl: 'http://127.0.0.1:8775/admin/api/status',
+        probeTimeoutMs: 90000,
+        readyFromMessage: true,
+        onReady: resolve,
+      });
+    });
+    child.emitMessage({ type: 'ready', port: 8775 });
+    await expect(ready).resolves.toBeUndefined();
+  });
+
+  it('reports why the sidecar failed: its stderr error line, not the stack', async () => {
+    const { manager, children } = crashingManager();
+    const restarts = [];
+    manager.supervise('echoer', { port: 8775 }, {
+      probeUrl: 'http://127.0.0.1:8775/admin/api/status',
+      onRestart: (info) => restarts.push(info),
+    });
+    children[0].emitStderr(LISTEN_ERROR);
+    children[0].emitExit(1, null);
+    expect(restarts).toEqual([{
+      delayMs: 500,
+      reason: 'Error: listen address 127.0.0.1:8765 is already in use; another R1CORD server or core is bound to this port',
+    }]);
+  });
+
+  it('falls back to the exit code, then re-reports when the error line trails the exit', async () => {
+    const { manager, children } = crashingManager();
+    const restarts = [];
+    manager.supervise('echoer', { port: 8775 }, {
+      probeUrl: 'http://127.0.0.1:8775/admin/api/status',
+      onRestart: (info) => restarts.push(info),
+    });
+    children[0].emitExit(3, null);
+    children[0].emitStderr('Error: the datastore is locked by another R1CORD\n    at open (store.js:1:1)');
+    expect(restarts).toEqual([
+      { delayMs: 500, reason: 'exited with code 3' },
+      { delayMs: 500, reason: 'Error: the datastore is locked by another R1CORD' },
+    ]);
+  });
+
+  it('retryNow relaunches a failed sidecar at once and resets its backoff', async () => {
+    const { manager, children, spawnImpl } = crashingManager();
+    const restarts = [];
+    manager.supervise('echoer', { port: 8775 }, {
+      probeUrl: 'http://127.0.0.1:8775/admin/api/status',
+      backoffMs: 500,
+      maxBackoffMs: 8000,
+      onRestart: (info) => restarts.push(info.delayMs),
+    });
+    expect(manager.retryNow('echoer')).toBe(false);
+    children[0].emitExit(1, null);
+    expect(restarts).toEqual([500]);
+    // The 500 ms backoff never ends by itself here; only Retry gets past it.
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(spawnImpl).toHaveBeenCalledTimes(1);
+    expect(manager.retryNow('echoer')).toBe(true);
+    await vi.waitFor(() => expect(spawnImpl).toHaveBeenCalledTimes(2));
+    children[1].emitExit(1, null);
+    expect(restarts).toEqual([500, 500]);
+    await manager.stopGracefully('echoer', { timeoutMs: 10 });
+    expect(manager.retryNow('echoer')).toBe(false);
+  });
+});
 
 describe('SidecarManager', () => {
   it('builds process options from a descriptor without using shell command strings', () => {

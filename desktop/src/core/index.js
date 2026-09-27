@@ -2,6 +2,10 @@
 // Black-box tests: R1CORD_TARGET=node R1CORD_NODE_CMD="node src/core/index.js"
 // Flags --no-worker / --no-usb (and env R1CORD_NO_WORKER / R1CORD_NO_USB) skip those loops.
 // R1CORD_SERVER_CONFIG selects config.toml when --config is omitted.
+// Two listeners: the admin app on listen_host:listen_port (--port/--host override it), and the
+// API-only /v1 app on 127.0.0.1:api_port for USB reverse and Tailscale Serve. The USB watcher
+// starts only once the API listener is bound, and its reverse targets the port it bound
+// (state.apiPort); an api_port change in Settings takes effect on restart.
 
 'use strict';
 
@@ -10,9 +14,12 @@ require('./sqlite-warning');
 const childProcess = require('node:child_process');
 const { loadConfig, withUpdates } = require('./config');
 const { resolveConfigPath } = require('./paths');
-const { createApp } = require('./app');
+const { createApp, createApiApp } = require('./app');
 const desktop = require('./desktop');
 const { installHost } = require('./host');
+
+// The API-only listener is always loopback: USB reverse and Tailscale Serve reach it from this PC.
+const API_HOST = '127.0.0.1';
 
 function openDashboard(url) {
   if (process.platform === 'win32') {
@@ -68,27 +75,67 @@ function listenError(error, host, port) {
   return wrapped;
 }
 
+/**
+ * Record the port the API-only listener bound (state.apiPort, state.apiApp) and point the USB
+ * reverse at it, then re-apply Tailscale Serve to it when config.tailscale_serve is on. The
+ * recording is done when this returns; the returned promise settles once Serve was tried, and a
+ * Serve failure is logged, never thrown: startup goes on without it.
+ * @param {object} state admin app state
+ * @param {import('fastify').FastifyInstance} apiApp listening API-only app
+ * @param {{tailscale?: {enableServe: (port: number) => Promise<void>}}} [options]
+ * @returns {Promise<boolean>} whether Serve was re-applied
+ */
+function apiBound(state, apiApp, { tailscale = null } = {}) {
+  const port = apiApp.server.address().port;
+  state.apiPort = port;
+  state.apiApp = apiApp;
+  state.usb.setApiPortSource(() => state.apiPort);
+  return reapplyServe(state, port, tailscale);
+}
+
+async function reapplyServe(state, port, tailscale) {
+  if (!state.config.tailscale_serve) return false;
+  const log = state.loggers.app;
+  try {
+    await (tailscale || require('./tailscale').createTailscale()).enableServe(port);
+    log.info(`tailscale: Serve re-applied to the API listener on ${API_HOST}:${port}`);
+    return true;
+  } catch (error) {
+    log.warning(`tailscale: could not re-apply Serve to ${API_HOST}:${port}: ${error && error.message ? error.message : error}`);
+    return false;
+  }
+}
+
 async function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
   const configPath = resolveConfigPath({ config: args.config || null });
-  let config = loadConfig(configPath);
-  const updates = {};
+  let listenPort = null;
   if (args.port != null && args.port !== '') {
-    const port = Number(args.port);
-    if (!Number.isInteger(port) || port < 0) throw new Error(`invalid --port: ${args.port}`);
-    updates.listen_port = port;
+    listenPort = Number(args.port);
+    if (!Number.isInteger(listenPort) || listenPort < 0) throw new Error(`invalid --port: ${args.port}`);
   }
+  // A defaulted api_port must avoid the --port the admin listener really uses.
+  let config = loadConfig(configPath, listenPort === null ? {} : { listenPort });
+  const updates = {};
+  if (listenPort !== null) updates.listen_port = listenPort;
   if (args.host) updates.listen_host = args.host;
   if (Object.keys(updates).length) config = withUpdates(config, updates);
 
   const noWorker = args.noWorker || process.env.R1CORD_NO_WORKER === '1';
   const noUsb = args.noUsb || process.env.R1CORD_NO_USB === '1';
-  const app = createApp(config, { configPath, noWorker, noUsb });
+  // The watcher starts below, once the API listener it reverse-forwards to is bound.
+  const app = createApp(config, { configPath, noWorker, noUsb: true });
+  let apiApp = null;
 
   let closing = false;
   const shutdown = async () => {
     if (closing) return;
     closing = true;
+    try {
+      if (apiApp) await apiApp.close();
+    } catch (_error) {
+      // the admin app still has to close the store and release the lock
+    }
     try {
       await app.close();
     } finally {
@@ -114,6 +161,30 @@ async function main(argv = process.argv.slice(2)) {
     }
     throw listenError(error, config.listen_host, config.listen_port);
   }
+
+  apiApp = createApiApp(app.state);
+  try {
+    await apiApp.listen({ host: API_HOST, port: config.api_port });
+  } catch (error) {
+    try {
+      await apiApp.close();
+    } catch (_close) {
+      // listen failed
+    }
+    apiApp = null;
+    try {
+      await app.close();
+    } catch (_close) {
+      // listen failed
+    }
+    throw listenError(error, API_HOST, config.api_port);
+  }
+  // Serve is re-applied in the background: the tailscale CLI may be slow or missing.
+  apiBound(app.state, apiApp);
+  app.state.loggers.app.info(
+    `listening: admin http://${config.listen_host}:${config.listen_port}  api http://${API_HOST}:${app.state.apiPort}/v1`,
+  );
+  if (!noUsb) app.state.usb.start();
 
   const host = installHost({
     port: config.listen_port,
@@ -142,4 +213,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { main, parseArgs, listenError };
+module.exports = { main, parseArgs, listenError, apiBound };

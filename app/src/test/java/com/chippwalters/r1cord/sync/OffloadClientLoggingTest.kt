@@ -37,7 +37,7 @@ class OffloadClientLoggingTest {
     private fun client(url: String = server.url("/").toString().trimEnd('/')) = OffloadClient(
         serverUrl = { url },
         token = { "secret-token" },
-        hasValidatedNetwork = { true },
+        routes = SnapshotRoutes(net = { NetSnapshot(vpnUp = false, nonVpnValidatedInternet = true) }, usb = { false }),
     )
 
     private val job = JobRequest(

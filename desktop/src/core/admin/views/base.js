@@ -41,6 +41,8 @@ function base({ path, refresh = false, title, body, scripts = '', refreshBlock }
       <a href="/admin" ${active(recordings)}>Recordings</a>
       <a href="/admin/devices" ${active(devices)}>Devices</a>
       <a href="/admin/config" ${active(settings)}>Settings</a>
+      <a href="/admin/setup" ${active(path.startsWith('/admin/setup'))}>Setup</a>
+      <a href="/admin/updates" ${active(path.startsWith('/admin/updates'))}>Updates</a>
       <a href="/admin/system" ${active(path === '/admin/system')}>System</a>
     </nav>
   </header>

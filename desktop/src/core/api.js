@@ -7,6 +7,7 @@ const { canonicalReviews } = require('./config');
 const { ValueError } = require('./errors');
 const { requireTokenHook } = require('./auth');
 const { requestPath } = require('./log');
+const { markSeen } = require('./setup-nonce');
 const {
   WRITERS,
   AudioMismatch,
@@ -240,6 +241,16 @@ async function drainBody(body) {
 }
 
 async function pair(request, reply) {
+  const store = request.server.state.store;
+  if (store.pairingLocked()) {
+    return sendError(
+      request,
+      reply,
+      429,
+      'pairing_locked',
+      'too many wrong pairing codes; create a new code on the desktop',
+    );
+  }
   const body = request.body;
   if (!isPlainObject(body)) {
     return sendError(request, reply, 422, 'invalid_request', 'Input should be a valid dictionary');
@@ -251,8 +262,9 @@ async function pair(request, reply) {
     return sendError(request, reply, 422, 'invalid_request', 'code: Input should be a valid string');
   }
   const code = String(body.code).trim();
-  const token = request.server.state.store.redeemPairCode(code, 'device');
+  const token = store.redeemPairCode(code, 'device');
   if (token === null) {
+    store.recordPairFailure();
     return sendError(request, reply, 400, 'invalid_code', 'unknown, used, or expired pairing code');
   }
   return reply.code(200).send({ token, serverName: request.server.state.config.server_name });
@@ -497,6 +509,20 @@ async function retryPublish(request, reply) {
   return reply.code(200).send({ status: rec.status });
 }
 
+// USB setup proves which tailnet peer is the attached R1: the app presents a pending nonce with its
+// bearer token, and the peer address (Serve's x-forwarded-for, else the socket) is recorded once.
+async function setupNonce(request, reply) {
+  const forwarded = request.headers['x-forwarded-for'];
+  const seenFrom = {
+    forwardedFor: forwarded === undefined ? null : String(forwarded),
+    remote: request.ip,
+  };
+  if (!markSeen(request.server.state, request.params.nonce, seenFrom)) {
+    return sendError(request, reply, 404, 'not_found', 'unknown, used, or expired setup nonce');
+  }
+  return reply.code(204).send();
+}
+
 function registerApi(app) {
   const auth = { preHandler: [requireTokenHook] };
   app.post('/v1/pair', guarded(pair));
@@ -509,6 +535,7 @@ function registerApi(app) {
   app.get('/v1/recordings/:recordingId', auth, guarded(getRecording));
   app.post('/v1/jobs/:jobId/retry-writer', auth, guarded(retryWriter));
   app.post('/v1/jobs/:jobId/retry-publish', auth, guarded(retryPublish));
+  app.get('/v1/setup/nonce/:nonce', auth, guarded(setupNonce));
 }
 
 module.exports = { registerApi, sendError, crash, MAX_PUT_BYTES };

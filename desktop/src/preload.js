@@ -6,6 +6,8 @@ const desktop = {
     ipcRenderer.on('sidecar:status', listener);
     return () => ipcRenderer.removeListener('sidecar:status', listener);
   },
+  getStartState: () => ipcRenderer.invoke('core:start-state'),
+  retryStart: () => ipcRenderer.invoke('core:retry'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setStartupMode: (mode) => ipcRenderer.invoke('settings:set-startup-mode', mode),
   log: (level, category, message, data) =>

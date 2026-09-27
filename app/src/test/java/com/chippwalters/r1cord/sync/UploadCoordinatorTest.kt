@@ -74,7 +74,7 @@ class UploadCoordinatorTest {
         client = OffloadClient(
             serverUrl = { server.url("/").toString().trimEnd('/') },
             token = { "tok-1" },
-            hasValidatedNetwork = { true },
+            routes = SnapshotRoutes(net = { NetSnapshot(vpnUp = false, nonVpnValidatedInternet = true) }, usb = { false }),
         ),
         maxChunk = maxChunk,
         openStream = { uri -> streams[uri]?.let { ByteArrayInputStream(it) } },
@@ -86,7 +86,7 @@ class UploadCoordinatorTest {
     fun sendsEveryFileInMaxChunkSizedPiecesAndEndsOnProcessing() {
         val progress = mutableListOf<UploadProgress>()
         val result = runBlocking {
-            coordinator().send("rec-1", "Site visit", setOf("organized", "summary"), false) { progress += it }
+            coordinator().send("rec-1", setOf("organized", "summary"), false) { progress += it }
         }
 
         val audioPuts = fake.puts.filter { it.name == "audio.m4a" }
@@ -102,6 +102,7 @@ class UploadCoordinatorTest {
         assertEquals(1, fake.commitCount)
         assertEquals(mapOf("audio.m4a" to 20L, "photo-1.jpg" to 5L), fake.manifest)
         assertEquals("reviews go out in canonical order", listOf("summary", "organized"), fake.createdReviews)
+        assertEquals("the job carries the recording's stored title", "Site visit", fake.createdTitle)
         assertEquals(listOf(PublishedPage("summary", "https://ex/commit/summary.html")), result.pages)
 
         // Badge transitions the coordinator reports to the library: sending -> processing.
@@ -122,7 +123,7 @@ class UploadCoordinatorTest {
     @Test
     fun resumesFromTheServerReportedReceivedBytes() {
         fake.initialReceived["audio.m4a"] = 12L
-        runBlocking { coordinator().send("rec-1", "Site visit", listOf("summary"), false) { } }
+        runBlocking { coordinator().send("rec-1", listOf("summary"), false) { } }
 
         val audioPuts = fake.puts.filter { it.name == "audio.m4a" }
         assertEquals(listOf(12L), audioPuts.map { it.offset })
@@ -133,7 +134,7 @@ class UploadCoordinatorTest {
     @Test
     fun adoptsTheServerCountAfterOffsetMismatch() {
         fake.mismatchOnce = "audio.m4a" to 12L
-        runBlocking { coordinator().send("rec-1", "Site visit", listOf("summary"), false) { } }
+        runBlocking { coordinator().send("rec-1", listOf("summary"), false) { } }
 
         val audioPuts = fake.puts.filter { it.name == "audio.m4a" }
         assertEquals(listOf(0L, 12L), audioPuts.map { it.offset })
@@ -148,7 +149,7 @@ class UploadCoordinatorTest {
             body = """{"error":"hash_mismatch","files":["audio.m4a"]}""",
             deleteFiles = listOf("audio.m4a"),
         )
-        val result = runBlocking { coordinator().send("rec-1", "Site visit", listOf("summary"), false) { } }
+        val result = runBlocking { coordinator().send("rec-1", listOf("summary"), false) { } }
 
         val audioPuts = fake.puts.filter { it.name == "audio.m4a" }
         assertEquals(6, audioPuts.size)
@@ -172,7 +173,7 @@ class UploadCoordinatorTest {
             deleteFiles = listOf("audio.m4a"),
         )
         val failure = assertFailsWith<OffloadException> {
-            runBlocking { coordinator().send("rec-1", "Site visit", listOf("summary"), false) { } }
+            runBlocking { coordinator().send("rec-1", listOf("summary"), false) { } }
         }
         assertEquals("hash_mismatch", failure.code)
         assertEquals(2, fake.commitCount)
@@ -184,7 +185,7 @@ class UploadCoordinatorTest {
     fun failureBeforeJobCreationResetsTheRecordingToLocal() {
         fake.failCreateJobWith = 500 to """{"error":"internal","message":"Writer queue exploded."}"""
         val failure = assertFailsWith<OffloadException> {
-            runBlocking { coordinator().send("rec-1", "Site visit", listOf("summary"), false) { } }
+            runBlocking { coordinator().send("rec-1", listOf("summary"), false) { } }
         }
         assertEquals("internal", failure.code)
         assertEquals(listOf("local" to null), library.statusUpdates)
@@ -200,7 +201,7 @@ class UploadCoordinatorTest {
             body = """{"error":"incomplete","files":[{"name":"audio.m4a","received":8,"size":20}]}""",
         )
         val failure = assertFailsWith<OffloadException> {
-            runBlocking { coordinator().send("rec-1", "Site visit", listOf("summary"), false) { } }
+            runBlocking { coordinator().send("rec-1", listOf("summary"), false) { } }
         }
         assertEquals("incomplete", failure.code)
         // The job exists on the server, so the recording stays on "sending", not "local".
@@ -209,12 +210,20 @@ class UploadCoordinatorTest {
     }
 
     @Test
-    fun blankTitleIsRejectedBeforeAnyWork() {
+    fun blankStoredTitleIsRejectedBeforeAnyNetworkWork() {
+        val untitled = FakeLibrary(bundle.copy(title = "   "))
         assertFailsWith<IllegalArgumentException> {
-            runBlocking { coordinator().send("rec-1", "   ", listOf("summary"), false) { } }
+            runBlocking { coordinator(libraryOps = untitled).send("rec-1", listOf("summary"), false) { } }
         }
         assertEquals(0, server.requestCount)
-        assertTrue(library.statusUpdates.isEmpty())
+        assertTrue(untitled.statusUpdates.isEmpty())
+    }
+
+    @Test
+    fun storedTitleIsTrimmedAndCappedAt120CharactersForTheJob() {
+        val long = "  " + "a".repeat(119) + "bc  "
+        runBlocking { coordinator(libraryOps = FakeLibrary(bundle.copy(title = long))).send("rec-1", listOf("summary"), false) { } }
+        assertEquals("a".repeat(119) + "b", fake.createdTitle)
     }
 
     // ---- cancellation ----
@@ -237,7 +246,7 @@ class UploadCoordinatorTest {
         val thrown = runBlocking {
             val job = launch(Dispatchers.IO) {
                 try {
-                    coordinator().send("rec-1", "Site visit", listOf("summary"), false) { }
+                    coordinator().send("rec-1", listOf("summary"), false) { }
                     outcome.complete(null)
                 } catch (error: Throwable) {
                     outcome.complete(error)
@@ -267,6 +276,7 @@ class UploadCoordinatorTest {
         var failCreateJobWith: Pair<Int, String>? = null
         var commitCount = 0
         var createdReviews: List<String>? = null
+        var createdTitle: String? = null
         private var jobs = 0
 
         data class Put(val name: String, val offset: Long, val bytes: ByteArray)
@@ -283,6 +293,7 @@ class UploadCoordinatorTest {
                 request.method == "POST" && path == "/v1/jobs" -> {
                     val job = JSONObject(String(body, Charsets.UTF_8)).getJSONObject("job")
                     createdReviews = job.getJSONArray("reviews").let { a -> List(a.length()) { a.getString(it) } }
+                    createdTitle = job.getString("title")
                     val files = job.getJSONArray("files")
                     for (index in 0 until files.length()) {
                         val file = files.getJSONObject(index)

@@ -9,9 +9,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
-/** metadata.json content, recording id/title generation, and audio-name rules. */
+/** metadata.json content, recording id/title generation, title validation, and audio-name rules. */
 class MetadataPayloadTest {
     private fun row(status: String = "SAVED", error: String? = null, waveform: String = "[0.5,1.0]") =
         RecordingRow(
@@ -129,5 +130,43 @@ class MetadataPayloadTest {
         val waveform = payload.getJSONArray("waveform")
         assertEquals(JSONArray("[0.25,0.75,1.0]").toString(), waveform.toString())
         assertNull("no JSON object leaks as an error string", payload.optJSONObject("error"))
+    }
+
+    private fun rejected(raw: String): String = try {
+        validateTitle(raw)
+        fail("\"$raw\" must be rejected")
+        error("unreachable")
+    } catch (expected: IllegalArgumentException) {
+        expected.message!!
+    }
+
+    @Test
+    fun titlesAreTrimmedAndAcceptedUpTo120Characters() {
+        assertEquals("Site visit", validateTitle("  Site visit \n"))
+        val longest = "a".repeat(119) + "z"
+        assertEquals(longest, validateTitle(longest))
+        assertEquals("surrounding spaces do not count", longest, validateTitle("   $longest   "))
+        assertEquals("Keep the title to 120 characters or fewer.", rejected("x".repeat(121)))
+    }
+
+    @Test
+    fun blankAndMultiLineOrControlCharacterTitlesAreRejected() {
+        assertEquals("Enter a title.", rejected(""))
+        assertEquals("Enter a title.", rejected(" \t\n "))
+        val oneLine = "Use one line without special characters."
+        assertEquals(oneLine, rejected("Site\nvisit"))
+        assertEquals(oneLine, rejected("Site\r\nvisit"))
+        assertEquals(oneLine, rejected("Site\tvisit"))
+        assertEquals(oneLine, rejected("Site\u007Fvisit"))
+        assertEquals(oneLine, rejected("Site\u0000visit"))
+    }
+
+    @Test
+    fun metadataTitleReadsTheStoredTitleAndNothingFromUnreadableText() {
+        val payload = buildMetadataPayload(row(), photos = emptyList(), extension = "m4a").toString(2)
+        assertEquals("Sep 23, 14:15", metadataTitle(payload))
+        assertNull(metadataTitle("""{"id":"x"}"""))
+        assertNull(metadataTitle("""{"id":"x","title":null}"""))
+        assertNull("a partly written file is not metadata", metadataTitle("""{"id":"x","ti"""))
     }
 }

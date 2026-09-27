@@ -111,13 +111,15 @@ describe('the whisper.cpp builds in the package', () => {
 });
 
 describe('the ffmpeg in the package', () => {
-  // A checkout whose binaries/win32 holds a stand-in ffmpeg.exe next to the real NOTICE.txt.
+  // A checkout whose binaries/win32 holds a stand-in ffmpeg.exe next to the real NOTICE.txt, and
+  // whose resources/apk (git-ignored, filled by scripts/stage-apks.js before a build) is staged empty.
   function standInCheckout(exeContents) {
     const checkout = tmpPath();
     const dir = path.join(checkout, 'binaries', 'win32');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'ffmpeg.exe'), exeContents);
     fs.copyFileSync(path.join(REPO, 'binaries', 'win32', 'NOTICE.txt'), path.join(dir, 'NOTICE.txt'));
+    fs.mkdirSync(path.join(checkout, 'resources', 'apk'), { recursive: true });
     return checkout;
   }
 

@@ -209,7 +209,7 @@ describe('usb', () => {
     watcher.pollOnce();
     expect(fake.pulled).toEqual(before);
     expect(store.latestFor('rec-1').jobId).toBe(job.jobId);
-    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:8765`]);
+    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:8766`]); // the API-only listener, not the admin
   });
 
   it('archive_action_pulls_without_job', () => {
@@ -498,14 +498,158 @@ describe('usb', () => {
     const { tree, fake, watcher } = setup();
     deviceRecording(tree, 'rec-rv');
     watcher.pollOnce();
-    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:8765`]);
+    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:8766`]);
 
     fake.devices = [];
     watcher.pollOnce();
     fake.devices = [[SERIAL, 'device']];
     watcher.pollOnce();
 
-    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:8765`, `${SERIAL} tcp:8765 tcp:8765`]);
+    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:8766`, `${SERIAL} tcp:8765 tcp:8766`]);
+  });
+
+  it('reverse targets the bound API port and a config-only api_port edit never re-points it', () => {
+    const { tree, fake, watcher, holder } = setup();
+    deviceRecording(tree, 'rec-api');
+    const bound = { port: 9101 };
+    watcher.setApiPortSource(() => bound.port);
+    watcher.pollOnce();
+    watcher.pollOnce();
+    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:9101`]); // once per connection
+
+    // Settings saved a new api_port; the listener is still on 9101 until restart.
+    holder.cfg = withUpdates(holder.cfg, { listen_port: 9100, api_port: 9102 });
+    watcher.pollOnce();
+    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:9101`]);
+
+    // A listener bound on another port re-points it.
+    bound.port = 9103;
+    watcher.pollOnce();
+    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:9101`, `${SERIAL} tcp:8765 tcp:9103`]);
+  });
+
+  it('applies no reverse while no API listener is bound, but still syncs', () => {
+    const { tree, fake, watcher, store } = setup();
+    deviceRecording(tree, 'rec-unbound');
+    let bound = null;
+    watcher.setApiPortSource(() => bound);
+    watcher.pollOnce();
+    expect(fake.reversed).toEqual([]);
+    expect(fake.pulled).toContain('rec-unbound/audio.m4a');
+    expect(store.latestFor('rec-unbound')).not.toBeNull();
+
+    bound = 9201;
+    watcher.pollOnce();
+    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:9201`]);
+  });
+
+  it('runs the connected handler once per plug-in of an adopted device, detached from the pass', async () => {
+    const { fake, watcher, store } = setup();
+    const OTHER = 'OTHERSERIAL0002';
+    fake.devices = [[SERIAL, 'device'], [OTHER, 'device']];
+    const seen = [];
+    watcher.setDeviceConnectedHandler(async (serial) => {
+      seen.push(serial);
+    });
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+    watcher.pollOnce(); // already plugged in at start: counts as arriving
+    await settle();
+    expect(seen).toEqual([SERIAL]); // OTHER is not adopted
+
+    watcher.pollOnce();
+    await settle();
+    expect(seen).toEqual([SERIAL]); // still present: no new transition
+
+    store.adoptDevice(OTHER);
+    watcher.pollOnce();
+    await settle();
+    expect(seen).toEqual([SERIAL]); // adopted while present is not a plug-in
+
+    fake.devices = [[OTHER, 'device']];
+    watcher.pollOnce();
+    fake.devices = [[SERIAL, 'device'], [OTHER, 'device']];
+    watcher.pollOnce();
+    await settle();
+    expect(seen).toEqual([SERIAL, SERIAL]); // unplugged and plugged back in
+
+    fake.devices = [];
+    watcher.pollOnce();
+    fake.devices = [[SERIAL, 'device'], [OTHER, 'device']];
+    watcher.pollOnce();
+    await settle();
+    expect(seen.sort()).toEqual([OTHER, SERIAL, SERIAL, SERIAL]);
+  });
+
+  it('a failing connected handler is logged and never breaks the pass', async () => {
+    const { tree, fake, store, holder } = setup();
+    deviceRecording(tree, 'rec-handler');
+    const warnings = [];
+    const watcher = new UsbWatcher(store, () => holder.cfg, {
+      logger: { info: () => {}, warning: (message) => warnings.push(message) },
+    });
+    watcher._run = fake.run.bind(fake);
+    let calls = 0;
+    watcher.setDeviceConnectedHandler((serial) => {
+      calls += 1;
+      if (calls === 1) throw new Error(`boom ${serial}`);
+      return Promise.reject(new Error('async boom'));
+    });
+
+    watcher.pollOnce();
+    expect(fake.pulled).toContain('rec-handler/audio.m4a'); // the pass finished
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(warnings).toEqual([`usb: ${SERIAL} connected handler failed: Error: boom ${SERIAL}`]);
+
+    fake.devices = [];
+    watcher.pollOnce();
+    fake.devices = [[SERIAL, 'device']];
+    watcher.pollOnce();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(calls).toBe(2);
+    expect(warnings[1]).toBe(`usb: ${SERIAL} connected handler failed: Error: async boom`);
+  });
+
+  it('suspend lets the in-flight device sync finish, then runs no adb until resume', async () => {
+    const { tree, fake, store, watcher } = setup();
+    deviceRecording(tree, 'rec-a');
+    deviceRecording(tree, 'rec-b');
+    const calls = [];
+    let suspended = null;
+    let resolved = false;
+    watcher._run = (args, options) => {
+      calls.push(args.slice(1).join(' '));
+      // USB setup takes the transport while rec-a's first pull is running.
+      if (args[3] === 'pull' && suspended === null) {
+        suspended = watcher.suspend('setup');
+        suspended.then(() => {
+          resolved = true;
+        });
+      }
+      return fake.run(args, options);
+    };
+
+    watcher.pollOnce();
+    await suspended;
+    expect(resolved).toBe(true);
+    expect(watcher.suspended).toBe('setup');
+    // rec-a finished (metadata + audio, job queued); rec-b was not started.
+    expect(fake.pulled).toEqual(['rec-a/metadata.json', 'rec-a/audio.m4a']);
+    expect(store.latestFor('rec-a')).not.toBeNull();
+    expect(store.latestFor('rec-b')).toBeNull();
+
+    const before = calls.length;
+    watcher.pollOnce();
+    watcher._apply('adb', watcher._config(), [{ serial: SERIAL, model: 'R1', state: 'device' }]);
+    expect(calls.length).toBe(before); // no devices, reverse, list or pull while suspended
+    await expect(watcher.suspend('setup')).resolves.toBeUndefined(); // idle: resolves at once
+
+    watcher.resume();
+    expect(watcher.suspended).toBeNull();
+    watcher.pollOnce();
+    expect(fake.pulled).toContain('rec-b/audio.m4a');
+    // The reverse is re-applied after setup (the device may have rebooted meanwhile).
+    expect(fake.reversed).toEqual([`${SERIAL} tcp:8765 tcp:8766`, `${SERIAL} tcp:8765 tcp:8766`]);
   });
 
   it('missing_adb_sets_error_and_clears_connections', () => {

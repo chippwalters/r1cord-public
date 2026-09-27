@@ -1,7 +1,83 @@
 # Changelog
 
 Versions are the app's `versionName`; the desktop companion carries its own version (since 0.4.0
-in `desktop/package.json`) and is noted where it changed.
+in `desktop/package.json`), as does the device-controls helper R1CORD controls (since 0.4.0, in
+`device-controls/build.gradle.kts`); each is noted where it changed.
+
+## 0.4.0 (beta) — Wi-Fi switch, direct power off, rename, thumbnails, new Send panel (R1CORD controls 1.0.0)
+
+- **Wi-Fi switch in Settings.** A live **Wi-Fi** on/off switch, plus a **Wi-Fi networks** button
+  that opens Android's Wi-Fi panel for choosing a network. The switch works through the new
+  helper (below); without it, Wi-Fi networks still works.
+- **Power off turns the R1 off.** One confirmation, then the R1 shuts down directly through the
+  helper. Without the helper it falls back to Android's power menu, as before. Power off and
+  Wi-Fi off are refused while a recording or an upload is running. Software cannot turn a
+  fully-off R1 on: use the power button.
+- **R1CORD controls 1.0.0**, a small second APK with no screen of its own
+  (`com.chippwalters.r1cord.controls`, source in `device-controls/`). It is signed with the
+  public AOSP platform test key, which the R1's Android image uses — so it works only on such an
+  image — and it answers only R1CORD signed with the CHIPPWALTERS key.
+- **Rename a recording** with the pencil on its Detail screen, or **RENAME** in the Send panel.
+  The title is saved on the R1 and in the recording's `metadata.json`; file and folder names never
+  change. Recordings already sent keep their old title on the desktop; new sends use the new one.
+- **Thumbnails.** A recording's first photo appears beside its title in the Library, while
+  recording, on Detail and in the Send panel.
+- **Send panel redesigned** to fit the R1's screen: the title with Rename, the three review
+  choices in one row, the Publish switch, and CANCEL / SEND always visible.
+- R1CORD Desktop 0.5.0 or later installs it, the helper and Tailscale over USB (Setup → Set up R1).
+- An update signed with a different key is refused by Android; do not uninstall to get past it
+  (that erases the list of recordings and the pairing) — stop and compare the signer.
+- Tested on the device: Power off through the helper shut the R1 down in an orderly way, and the
+  power button then started it from cold straight into R1CORD — still paired, every recording
+  intact. Tested over Tailscale on a real tailnet: after Set up R1, Send from a phone hotspot and
+  Refresh with the USB cable unplugged both went over Tailscale.
+
+## R1CORD Desktop 0.5.0 (beta) — Tailscale remote access, USB setup, updates
+
+- **The R1 can no longer reach the admin.** A separate listener, `api_port` (default 8766),
+  serves only the `/v1` API; the USB cable and Tailscale both go there, and the admin pages are
+  not registered on it.
+- **Setup page**, one numbered checklist with each step marked Done, Needs you or Blocked:
+  install Tailscale on this PC (with your consent), sign it in, share `/v1` on your tailnet with
+  Tailscale Serve (no Funnel; the first time, Tailscale asks you to approve Serve through a link
+  the page shows) and verify it, replace the tailnet policy with the one shown (**Copy**; it keeps
+  a new tailnet's default SSH rule and Funnel setting), tag this PC `tag:r1cord-server`, create an
+  auth key with Tags on → `tag:r1cord` (Pre-approved appears only if device approval is on), and
+  **Set up R1** over USB: installs R1CORD, R1CORD controls and Tailscale, grants their
+  permissions, signs the R1 in to Tailscale with that key (the desktop types it in), provisions
+  the server URL and a device key, proves which tailnet device is this R1, and checks its
+  isolation. The run shows its steps live in a window, with Close once it ends. It asks before
+  downloading apps from the release server (only when one is missing on the PC; otherwise it
+  lists the versions it has) and for confirmation that the tailnet policy was replaced.
+  **Ready** only when every check passes; with no third device on the tailnet, isolation is
+  *inconclusive*. An R1 that joins without its tag is caught, with the fix: tag it
+  `tag:r1cord` in the admin console and run setup again with the key box blank. An R1CORD older
+  than 0.4.0 is simply updated, without a separate confirmation.
+- **Start screen.** The window shows *Starting R1CORD…* while it starts, and the reason with
+  **Retry** if it cannot, instead of an empty window.
+- **Updates page.** Update checks are off until you turn them on; R1 app updates can be off,
+  offered (ask) or installed; **Check now**. Releases come from a signed `manifest.json`, and every
+  APK's signer is checked against built-in pins.
+- **Pairing codes lock after five wrong tries** until a new code is made.
+- **Tailscale replaces the Cloudflare tunnel as the recommended remote route.** A LAN address or
+  your own tunnel still works as the Server URL; USB still works with Wi-Fi off.
+- Packaging bundles the published R1CORD and helper APKs for offline USB setup (see README).
+- Tested end to end on a real tailnet (Tailscale 1.102.4): Set up R1 completed every step, then
+  the R1 sent from a phone hotspot and refreshed with the cable unplugged, both over Tailscale.
+  Isolation was *inconclusive* only because that tailnet had no third device to test against.
+- On a work or custom-domain Tailscale account, the tailnet starts a 14-day trial; move it to the
+  free Personal plan with Billing → Choose a plan → Personal (there is no separate opt-out button).
+
+## 0.3.4 (beta) — recording works again after a restart
+
+- **Fixed: "Recording failed: Volume external_primary not found" after the R1 restarts.** Android
+  can start R1CORD a moment before the device's storage is ready. The app's startup check then
+  failed and kept failing — nothing could be recorded, deleted or sent until the app was
+  restarted. The check is now retried until storage is ready.
+- **A failed start returns to the home screen** with the error, instead of leaving the recording
+  screen with every button disabled.
+- The guides now say how to stop Google Play Services' repeating *This device isn't Play Protect
+  certified* notification (it is not from R1CORD).
 
 ## R1CORD Desktop 0.4.0 (beta) — the companion becomes a Windows app
 

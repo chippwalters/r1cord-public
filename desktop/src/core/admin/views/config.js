@@ -101,6 +101,8 @@ ${isLabel(page.promptRestored) ? html`<p class="ok">Restored the default ${label
   <label>server_name <input type="text" name="server_name" value="${cfg.server_name}"></label>
   <label>listen_host <input type="text" name="listen_host" value="${cfg.listen_host}"></label>
   <label>listen_port <input type="number" name="listen_port" value="${cfg.listen_port}"></label>
+  <label>api_port <input type="number" name="api_port" value="${cfg.api_port}" min="1" max="65535"></label>
+  <p class="muted">api_port serves only the R1 /v1 API on 127.0.0.1 (USB cable and Tailscale Serve); it must differ from listen_port and takes effect on restart. While /v1 is shared on the tailnet, turn that off on the Setup page before changing it.</p>
   <p class="muted">Datastore (not editable here): <span class="path">${cfg.datastore}</span></p>
   <h2>Publish (optional)</h2>
   <label>webdav_folder <input type="text" name="webdav_folder" value="${cfg.webdav_folder}"></label>

@@ -83,7 +83,8 @@ function system(page) {
   <dl class="facts">
     <dt>Version</dt><dd>r1cord-server ${page.serverVersion}</dd>
     <dt>Server name</dt><dd>${config.server_name}</dd>
-    <dt>Listening on</dt><dd class="path">http://${config.listen_host}:${config.listen_port}</dd>
+    <dt>Admin address</dt><dd class="path">http://${config.listen_host}:${config.listen_port}</dd>
+    <dt>R1 API address</dt><dd class="path">http://127.0.0.1:${config.api_port}/v1</dd>
     <dt>Run mode</dt><dd>${config.run_mode}${runMode}</dd>
     <dt>Last job</dt><dd>${page.lastJob}</dd>
     <dt>Data</dt><dd class="path">${config.datastore}</dd>

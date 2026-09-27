@@ -6,7 +6,7 @@ import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { ValueError } = require('../../src/core/errors');
-const { defaultConfig, loadConfig, saveConfig, withUpdates } = require('../../src/core/config');
+const { defaultApiPort, defaultConfig, loadConfig, saveConfig, withUpdates } = require('../../src/core/config');
 
 const tmpDirs = [];
 
@@ -33,6 +33,7 @@ describe('config', () => {
       server_name: 'Desk',
       listen_host: '0.0.0.0',
       listen_port: 9000,
+      api_port: 9001,
       datastore: path.join(dir, 'ds'),
       webdav_folder: path.join(dir, 'wd'),
       public_url_base: 'https://x.test/pub/',
@@ -60,6 +61,11 @@ describe('config', () => {
       email_enabled: true,
       email_to: 'someone@example.test',
       gws_cmd: 'gws1',
+      update_check: true,
+      update_check_asked: true,
+      r1_auto_update: 'install',
+      update_manifest_url: 'https://updates.example.test/r1cord/manifest.json',
+      tailscale_serve: true,
     };
     const file = path.join(dir, 'config.toml');
     saveConfig(cfg, file);
@@ -104,6 +110,12 @@ describe('config', () => {
     ['usb_poll_s = 0\n', 'usb_poll_s'],
     ['idle_exit_min = 0\n', 'idle_exit_min'],
     ['listen_port = "abc"\n', 'listen_port'],
+    ['api_port = "abc"\n', 'api_port'],
+    ['api_port = 0\n', 'api_port'],
+    ['api_port = 70000\n', 'api_port'],
+    ['api_port = 8765\n', 'api_port'],
+    ['listen_port = 8766\napi_port = 8766\n', 'api_port'],
+    ['r1_auto_update = "always"\n', 'r1_auto_update'],
     ['datastore = 123\n', 'datastore'],
     ['pair_code_ttl_s = [1]\n', 'pair_code_ttl_s'],
   ])('names the field on a parse error: %s', (snippet, field) => {
@@ -221,5 +233,77 @@ describe('config', () => {
     expect(cfg.admin_remote).toBe(true);
     expect(() => withUpdates(cfg, { asr_device: 'vulkan' })).toThrow(/invalid asr_device: vulkan/);
     expect(() => withUpdates(cfg, { asr_device: 'metal' })).toThrow(/invalid asr_device: metal/);
+  });
+
+  it('defaults the appliance keys: API port 8766, updates off and unasked, R1 updates ask', () => {
+    const cfg = defaultConfig({ env: { LOCALAPPDATA: 'C:\\nowhere' } });
+    expect(cfg.api_port).toBe(8766);
+    expect(cfg.api_port).not.toBe(cfg.listen_port);
+    expect(cfg.update_check).toBe(false);
+    expect(cfg.update_check_asked).toBe(false);
+    expect(cfg.r1_auto_update).toBe('ask');
+    expect(cfg.update_manifest_url).toBe('https://www.widgetgadget.com/cw1/R1CORD/auto-update-files/manifest.json');
+    expect(cfg.tailscale_serve).toBe(false);
+  });
+
+  it('loads a config written before the appliance keys with their defaults', () => {
+    const dir = makeTmp();
+    const file = write(dir, 'config.toml', 'admin_password = "pw"\nlisten_port = 9000\n');
+    const cfg = loadConfig(file, { env: { LOCALAPPDATA: dir } });
+    expect(cfg.listen_port).toBe(9000);
+    expect(cfg.api_port).toBe(8766);
+    expect(cfg.r1_auto_update).toBe('ask');
+    expect(cfg.update_check).toBe(false);
+  });
+
+  it('resolves an absent api_port around the listen port, and rejects only an explicit clash', () => {
+    const dir = makeTmp();
+    const options = { env: { LOCALAPPDATA: dir } };
+    // A pre-appliance config whose admin listener already sits on 8766 keeps starting.
+    const clash = write(dir, 'clash.toml', 'admin_password = "pw"\nlisten_port = 8766\n');
+    const cfg = loadConfig(clash, options);
+    expect(cfg.listen_port).toBe(8766);
+    expect(cfg.api_port).toBe(8767);
+    expect(fs.readFileSync(clash, 'utf8')).not.toContain('api_port'); // still resolved per start
+
+    // The --port the core really listens on is avoided too.
+    const plain = write(dir, 'plain.toml', 'admin_password = "pw"\n');
+    expect(loadConfig(plain, { ...options, listenPort: 8766 }).api_port).toBe(8767);
+    expect(loadConfig(clash, { ...options, listenPort: 8767 }).api_port).toBe(8768);
+    expect(loadConfig(plain, { ...options, listenPort: 9000 }).api_port).toBe(8766);
+
+    // First run with --port 8766 writes a non-clashing api_port.
+    const fresh = path.join(dir, 'fresh', 'config.toml');
+    const first = loadConfig(fresh, { ...options, listenPort: 8766 });
+    expect(first.api_port).toBe(8767);
+    expect(loadConfig(fresh, options).api_port).toBe(8767);
+
+    // An api_port the file sets is kept, and a clash with it is refused.
+    const explicit = write(dir, 'explicit.toml', 'admin_password = "pw"\nlisten_port = 8766\napi_port = 8766\n');
+    expect(() => loadConfig(explicit, options)).toThrow(/api_port must differ from listen_port \(8766\)/);
+    const kept = write(dir, 'kept.toml', 'admin_password = "pw"\napi_port = 9100\n');
+    expect(loadConfig(kept, { ...options, listenPort: 8766 }).api_port).toBe(9100);
+  });
+
+  it('defaultApiPort skips every taken port', () => {
+    expect(defaultApiPort(8765)).toBe(8766);
+    expect(defaultApiPort(8766)).toBe(8767);
+    expect(defaultApiPort(8766, 8767)).toBe(8768);
+    expect(defaultApiPort(8766, null, undefined)).toBe(8767);
+  });
+
+  it('refuses an api_port equal to listen_port or out of range in withUpdates', () => {
+    const cfg = defaultConfig({ env: { LOCALAPPDATA: 'C:\\nowhere' } });
+    expect(() => withUpdates(cfg, { api_port: cfg.listen_port })).toThrow(ValueError);
+    expect(() => withUpdates(cfg, { api_port: cfg.listen_port })).toThrow(/api_port must differ from listen_port/);
+    expect(() => withUpdates(cfg, { listen_port: cfg.api_port })).toThrow(/api_port must differ/);
+    expect(() => withUpdates(cfg, { api_port: 0 })).toThrow(/api_port must be between 1 and 65535/);
+    expect(() => withUpdates(cfg, { api_port: 65536 })).toThrow(/api_port/);
+    expect(() => withUpdates(cfg, { r1_auto_update: 'sometimes' })).toThrow(/invalid r1_auto_update/);
+    const moved = withUpdates(cfg, { listen_port: 8766, api_port: '8767' });
+    expect(moved.listen_port).toBe(8766);
+    expect(moved.api_port).toBe(8767); // coerced like the other ints
+    expect(withUpdates(cfg, { api_port: 1 }).api_port).toBe(1);
+    expect(withUpdates(cfg, { api_port: 65535 }).api_port).toBe(65535);
   });
 });

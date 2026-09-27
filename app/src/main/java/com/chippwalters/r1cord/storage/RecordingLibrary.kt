@@ -15,6 +15,7 @@ import android.os.Looper
 import android.os.StatFs
 import android.provider.MediaStore
 import androidx.room.Room
+import com.chippwalters.r1cord.device.MaintenanceGate
 import com.chippwalters.r1cord.model.PhotoItem
 import com.chippwalters.r1cord.model.PublishedPage
 import com.chippwalters.r1cord.model.RecordingItem
@@ -27,7 +28,6 @@ import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -51,7 +51,12 @@ class RecordingLibrary(context: Context) {
     private val lock = Mutex()
     private val active = mutableSetOf<String>()
     private val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-    private val ready = scope.async { lock.withLock { recover() } }
+    // Startup recovery needs MediaStore. At boot this process can start (Home app, power-menu
+    // accessibility service) before MediaProvider attaches the primary volume, and queries then
+    // fail with "Volume external_primary not found". A failed recovery must stay retryable: a
+    // cached failure would make every later library call, including starting a recording,
+    // rethrow it until the process restarts.
+    @Volatile private var recovered = false
     val items: StateFlow<List<RecordingItem>> = combine(dao.observeRecordings(), dao.observePhotos()) { rows, photos ->
         rows.map { row ->
             RecordingItem(
@@ -75,7 +80,7 @@ class RecordingLibrary(context: Context) {
         override fun onChange(selfChange: Boolean) {
             scope.launch {
                 runCatching {
-                    ready.await()
+                    ensureRecovered()
                     delay(300)
                     lock.withLock { reconcileMissing() }
                 }.onFailure { android.util.Log.w("R1CORD", "Could not reconcile externally changed media", it) }
@@ -83,7 +88,34 @@ class RecordingLibrary(context: Context) {
         }
     }
 
-    init { resolver.registerContentObserver(collection, true, observer) }
+    init {
+        resolver.registerContentObserver(collection, true, observer)
+        scope.launch { recoverAtStartup() }
+    }
+
+    private suspend fun ensureRecovered() {
+        if (recovered) return
+        lock.withLock {
+            if (!recovered) {
+                recover()
+                recovered = true
+            }
+        }
+    }
+
+    private suspend fun recoverAtStartup() {
+        var wait = 1_000L
+        while (true) {
+            try {
+                ensureRecovered()
+                return
+            } catch (error: Exception) {
+                android.util.Log.w("R1CORD", "Library recovery failed; retrying in $wait ms", error)
+            }
+            delay(wait)
+            wait = minOf(wait * 2, 30_000L)
+        }
+    }
 
     /** Recordable seconds left, at the byte rate of the format the next session will use. */
     fun remainingSeconds(bytesPerSecond: Long): Long = recordableSeconds(availableBytes(), bytesPerSecond)
@@ -91,7 +123,7 @@ class RecordingLibrary(context: Context) {
     internal fun hasRecordingSpace(): Boolean = availableBytes() > RESERVE_BYTES + STOP_MARGIN_BYTES
 
     internal suspend fun begin(wav: Boolean): RecordingTarget = withContext(Dispatchers.IO) {
-        ready.await()
+        ensureRecovered()
         lock.withLock {
             check(hasRecordingSpace()) { "Storage is full. Keep at least 64 MiB free before recording." }
             val now = System.currentTimeMillis()
@@ -113,17 +145,17 @@ class RecordingLibrary(context: Context) {
     }
 
     internal suspend fun captureStatus(id: String, status: String) = withContext(Dispatchers.IO) {
-        ready.await()
+        ensureRecovered()
         lock.withLock { dao.status(id, status) }
     }
 
     internal suspend fun checkpoint(id: String, duration: Long, waveform: List<Float>) = withContext(Dispatchers.IO) {
-        ready.await()
+        ensureRecovered()
         lock.withLock { dao.progress(id, duration, JSONArray(waveform).toString()) }
     }
 
     internal suspend fun finish(id: String, duration: Long, waveform: List<Float>, failure: String? = null): Boolean = withContext(Dispatchers.IO) {
-        ready.await()
+        ensureRecovered()
         lock.withLock {
             var audioUri = ""
             try {
@@ -159,8 +191,8 @@ class RecordingLibrary(context: Context) {
     }
 
     suspend fun addPhoto(recordingId: String, jpeg: File) = withContext(Dispatchers.IO) {
-        ready.await()
-        lock.withLock {
+        ensureRecovered()
+        libraryWrite { lock.withLock {
             val row = requireNotNull(dao.recording(recordingId)) { "Recording no longer exists." }
             check(row.status != "DELETING") { "Recording is being deleted." }
             // Camera writes may overlap recording: reserve 16 MiB beyond the audio stop threshold.
@@ -189,30 +221,59 @@ class RecordingLibrary(context: Context) {
                 runCatching { writeMetadata(recordingId) }
                 throw error
             } finally { bitmap.recycle() }
-        }
+        } }
     }
 
     suspend fun deleteRecording(id: String) = withContext(Dispatchers.IO) {
-        ready.await()
-        lock.withLock {
+        ensureRecovered()
+        libraryWrite { lock.withLock {
             check(id !in active) { "Stop recording before deleting it." }
             val row = dao.recording(id) ?: return@withLock
             dao.status(id, "DELETING")
             deleteFiles(row)
-        }
+        } }
+    }
+
+    /**
+     * Renames a recording. [title] is validated with [validateTitle]; the Room row is the
+     * durable title. metadata.json is rewritten only when the recording already has one, so
+     * no metadata is created early; a failed rewrite is reported, and [exportBundle] repairs
+     * the stale file before anything is sent.
+     */
+    suspend fun renameRecording(id: String, title: String): RenameResult = withContext(Dispatchers.IO) {
+        val clean = validateTitle(title)
+        ensureRecovered()
+        libraryWrite { lock.withLock {
+            check(id !in active) { "Stop recording before renaming it." }
+            val row = dao.recording(id) ?: error("Recording no longer exists.")
+            check(row.status != "DELETING") { "Recording is being deleted." }
+            check(dao.title(id, clean) > 0) { "Recording no longer exists." }
+            if (row.metadataUri.isEmpty()) return@withLock RenameResult.Saved
+            try {
+                writeMetadata(id)
+                RenameResult.Saved
+            } catch (error: Exception) {
+                android.util.Log.w("R1CORD", "Title saved but metadata.json was not rewritten", error)
+                RenameResult.SavedMetadataFailed(error.message ?: "metadata.json could not be updated.")
+            }
+        } }
     }
 
     suspend fun exportBundle(id: String): OffloadBundle = withContext(Dispatchers.IO) {
-        ready.await()
+        ensureRecovered()
         lock.withLock {
             val row = dao.recording(id) ?: error("Recording no longer exists.")
             check(row.status == "SAVED") { "Only saved recordings can be sent." }
             check(row.audioUri.isNotEmpty()) { "This recording has no audio file." }
             val photos = dao.photos(id).filter { it.status == "SAVED" && it.uri.isNotEmpty() }
                 .map { "photo-${it.id}.jpg" to Uri.parse(it.uri) }
-            val metadataJson = resolver.openInputStream(Uri.parse(row.metadataUri.takeIf { it.isNotEmpty() } ?: error("metadata.json is missing.")))
-                ?.use { it.readBytes().toString(Charsets.UTF_8) }
-                ?: error("metadata.json is missing.")
+            // A rename whose metadata rewrite failed leaves a stale title in metadata.json;
+            // rebuild it from Room before sending so the server gets the durable title.
+            var metadataJson = readMetadataJson(row)
+            if (metadataTitle(metadataJson) != row.title) {
+                writeMetadata(id)
+                metadataJson = readMetadataJson(dao.recording(id) ?: error("Recording no longer exists."))
+            }
             OffloadBundle(
                 id = row.id,
                 title = row.title,
@@ -227,25 +288,40 @@ class RecordingLibrary(context: Context) {
     }
 
     suspend fun updateJob(id: String, jobId: String?, status: String, url: String?, pages: List<PublishedPage>, sentAt: Long?) = withContext(Dispatchers.IO) {
-        ready.await()
+        ensureRecovered()
         lock.withLock { dao.updateJob(id, jobId, status, url, encodePages(pages), sentAt) }
     }
 
     suspend fun updateJobStatus(id: String, status: String, url: String?, pages: List<PublishedPage>) = withContext(Dispatchers.IO) {
-        ready.await()
+        ensureRecovered()
         lock.withLock { dao.updateJobStatus(id, status, url, encodePages(pages)) }
     }
 
     suspend fun deletePhoto(recordingId: String, photoId: String) = withContext(Dispatchers.IO) {
-        ready.await()
-        lock.withLock {
+        ensureRecovered()
+        libraryWrite { lock.withLock {
             val photo = dao.photos(recordingId).firstOrNull { it.id == photoId } ?: return@withLock
             dao.photoStatus(photoId, "DELETING")
             deleteUri(photo.uri)
             dao.deletePhoto(photoId)
             writeMetadata(recordingId)
+        } }
+    }
+
+    /** Runs a library write unless device maintenance is active; the gate is held until it ends. */
+    private inline fun <T> libraryWrite(block: () -> T): T {
+        check(MaintenanceGate.tryBegin(MaintenanceGate.Work.LIBRARY_WRITE)) { MAINTENANCE_MESSAGE }
+        try {
+            return block()
+        } finally {
+            MaintenanceGate.end(MaintenanceGate.Work.LIBRARY_WRITE)
         }
     }
+
+    private fun readMetadataJson(row: RecordingRow): String =
+        resolver.openInputStream(Uri.parse(row.metadataUri.takeIf { it.isNotEmpty() } ?: error("metadata.json is missing.")))
+            ?.use { it.readBytes().toString(Charsets.UTF_8) }
+            ?: error("metadata.json is missing.")
 
     private suspend fun recover() {
         for (original in dao.recordings()) {
@@ -435,6 +511,7 @@ class RecordingLibrary(context: Context) {
     internal data class RecordingTarget(val id: String, val uri: Uri)
     companion object {
         const val RESERVE_BYTES = 64L * 1024 * 1024
+        internal const val MAINTENANCE_MESSAGE = "Device maintenance in progress. Try again shortly."
         private const val STOP_MARGIN_BYTES = 2L * 1024 * 1024
         private const val PHOTO_MARGIN_BYTES = 16L * 1024 * 1024
         internal const val AAC_EXTENSION = "m4a"
@@ -459,6 +536,33 @@ internal fun newRecordingId(at: Long): String =
 /** Library title shown to the user: short local date and time, e.g. "Sep 23, 14:15". */
 internal fun recordingTitle(at: Long): String =
     SimpleDateFormat("MMM d, HH:mm", Locale.getDefault()).format(Date(at))
+
+/** Longest title a recording may carry, in UTF-16 chars; matches the server's job title limit. */
+internal const val MAX_TITLE_LENGTH = 120
+
+/**
+ * A user-entered recording title, trimmed. Rejects blank titles, any control character
+ * (including newlines and DEL) and titles longer than [MAX_TITLE_LENGTH], with text the
+ * user can read, via IllegalArgumentException.
+ */
+internal fun validateTitle(raw: String): String {
+    val title = raw.trim()
+    require(title.isNotEmpty()) { "Enter a title." }
+    require(title.none { it < ' ' || it == '\u007F' }) { "Use one line without special characters." }
+    require(title.length <= MAX_TITLE_LENGTH) { "Keep the title to $MAX_TITLE_LENGTH characters or fewer." }
+    return title
+}
+
+/** The title stored in a metadata.json text, or null when the text is not readable metadata. */
+internal fun metadataTitle(json: String): String? =
+    runCatching { JSONObject(json).let { if (it.isNull("title")) null else it.getString("title") } }.getOrNull()
+
+/** Outcome of a rename that passed validation: the Room title is always saved. */
+sealed interface RenameResult {
+    data object Saved : RenameResult
+    /** The new title is saved; metadata.json kept the old one and is repaired before the next send. */
+    data class SavedMetadataFailed(val message: String) : RenameResult
+}
 
 /**
  * The container implied by a recording's MediaStore display name: WAV only when the

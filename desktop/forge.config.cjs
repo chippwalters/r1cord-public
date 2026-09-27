@@ -90,6 +90,38 @@ async function checkBundledFfmpeg(packagerConfig) {
   if (!fs.existsSync(path.join(dir, 'NOTICE.txt'))) throw new Error(`${path.join(dir, 'NOTICE.txt')} is missing`);
 }
 
+// The R1 APKs bundled for offline USB setup: resources/apk, staged by `node scripts/stage-apks.js`
+// from a release folder. Every file must pass the APK Signature Scheme v2/v3 check and
+// carry its pinned signer, and the folder must hold the R1CORD app and the device-controls helper.
+function checkBundledApks(packagerConfig) {
+  const { checkPinned, verifyApk } = require('./src/core/apk');
+  const { APK_ENTRIES, pinFor } = require('./src/core/release-keys');
+  const entry = packagerConfig.extraResource.find((item) => path.basename(item) === 'apk');
+  if (!entry) throw new Error('forge.config.cjs: no resources/apk extraResource for the R1 APKs');
+  const dir = path.resolve(__dirname, entry);
+  const stage = 'run `node scripts/stage-apks.js --from <folder containing R1CORD-<version>.apk and '
+    + 'R1CORD-controls-<version>.apk>` first (e.g. the downloaded auto-update-files folder)';
+  if (!fs.existsSync(dir)) throw new Error(`${dir} is missing: ${stage}`);
+  const found = new Set();
+  for (const name of fs.readdirSync(dir)) {
+    const file = path.join(dir, name);
+    if (!name.toLowerCase().endsWith('.apk')) throw new Error(`${file}: only APKs belong in resources/apk`);
+    let info;
+    try {
+      info = verifyApk(file);
+      const kind = ['r1cord', 'controls'].find((key) => APK_ENTRIES[key] === info.package);
+      if (!kind) throw new Error(`${info.package} is not an APK R1CORD Desktop bundles`);
+      checkPinned(info, pinFor(kind));
+      found.add(kind);
+    } catch (error) {
+      throw new Error(`${file}: ${error.message}`);
+    }
+  }
+  for (const kind of ['r1cord', 'controls']) {
+    if (!found.has(kind)) throw new Error(`${dir} has no verified ${APK_ENTRIES[kind]} APK: ${stage}`);
+  }
+}
+
 module.exports = {
   packagerConfig: {
     asar: true,
@@ -100,6 +132,8 @@ module.exports = {
       './src/main/services/startup/plug-watcher.js',
       // ffmpeg.exe + NOTICE.txt -> resources/win32; see FFMPEG_EXE_SHA256 for where the exe comes from.
       './binaries/win32',
+      // R1CORD + device-controls APKs -> resources/apk for offline USB setup; see checkBundledApks.
+      './resources/apk',
     ],
     ignore: ignoreForPackage,
   },
@@ -107,6 +141,7 @@ module.exports = {
   hooks: {
     prePackage: async (forgeConfig) => {
       await checkBundledFfmpeg(forgeConfig.packagerConfig);
+      checkBundledApks(forgeConfig.packagerConfig);
     },
     packageAfterPrune: async (_forgeConfig, buildPath, _electronVersion, platform, arch) => {
       await pruneWhisperBuilds(buildPath, platform, arch);

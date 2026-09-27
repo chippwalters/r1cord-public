@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Granted only because the release APK is signed with the device platform key. -->
+    <uses-permission android:name="android.permission.SHUTDOWN" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.REBOOT" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.NETWORK_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- The caller check resolves R1CORD's package and signer. -->
+    <queries>
+        <package android:name="com.chippwalters.r1cord" />
+    </queries>
+    <application android:label="R1CORD controls" android:allowBackup="false"
+        tools:ignore="MissingApplicationIcon">
+        <!-- Exported for R1CORD only: every method verifies the calling package and signer. -->
+        <service android:name=".ControlService" android:exported="true" tools:ignore="ExportedService">
+            <intent-filter>
+                <action android:name="com.chippwalters.r1cord.controls.BIND" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

@@ -6,7 +6,8 @@ import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { defaultConfig, withUpdates } = require('../../src/core/config');
-const { createApp, activityAt, monotonicSeconds } = require('../../src/core/app');
+const { createApp, createApiApp, activityAt, monotonicSeconds } = require('../../src/core/app');
+const { createNonce, consumeSeen } = require('../../src/core/setup-nonce');
 
 const cleanup = [];
 afterEach(async () => {
@@ -61,5 +62,91 @@ describe('activityAt', () => {
     app.state.windowOpen = false;
     expect(watcher._idleCheck(app.state.config)).toBe(true);
     expect(exits).toEqual([1]);
+  });
+});
+
+async function openApiApp(app) {
+  const api = createApiApp(app.state);
+  cleanup.push(() => api.close());
+  await api.ready();
+  return api;
+}
+
+describe('createApiApp', () => {
+  it('serves the same token-protected /v1 as the admin listener', async () => {
+    const app = await openApp();
+    const api = await openApiApp(app);
+    const token = app.state.store.issueDeviceToken('usb:TESTSERIAL');
+    for (const server of [app, api]) {
+      const anonymous = await server.inject({ method: 'GET', url: '/v1/recordings' });
+      expect(anonymous.statusCode).toBe(401);
+      expect(anonymous.json().error).toBe('unauthorized');
+      const listed = await server.inject({
+        method: 'GET',
+        url: '/v1/recordings',
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(listed.statusCode).toBe(200);
+      expect(listed.json()).toEqual([]);
+      expect(listed.headers['cache-control']).toBe('no-store');
+    }
+  });
+
+  it('has no admin or static routes, even for a loopback request without proxy headers', async () => {
+    const app = await openApp();
+    const api = await openApiApp(app);
+    // The admin listener admits this exact request as local: the API listener must not have the route.
+    const local = await app.inject({ method: 'GET', url: '/admin/api/status', remoteAddress: '127.0.0.1' });
+    expect(local.statusCode).toBe(200);
+
+    const probes = [
+      ['GET', '/admin'],
+      ['GET', '/admin/'],
+      ['GET', '/admin/api/status'],
+      ['GET', '/admin/config'],
+      ['POST', '/admin/config'],
+      ['POST', '/admin/pair'],
+      ['POST', '/admin/shutdown'],
+      ['POST', '/admin/tokens/1/revoke'],
+      ['GET', '/admin/setup'],
+      ['GET', '/admin/updates'],
+      ['GET', '/static/admin.css'],
+      ['GET', '/v1/..%2Fadmin/api/status'],
+      ['GET', '/'],
+    ];
+    for (const [method, url] of probes) {
+      const res = await api.inject({ method, url, remoteAddress: '127.0.0.1' });
+      expect(res.statusCode, `${method} ${url}`).toBe(404);
+      expect(res.json().error).toBe('not_found');
+    }
+  });
+
+  it('answers the setup nonce route', async () => {
+    const app = await openApp();
+    const api = await openApiApp(app);
+    const token = app.state.store.issueDeviceToken('usb:TESTSERIAL');
+    const nonce = createNonce(app.state);
+    const res = await api.inject({
+      method: 'GET',
+      url: `/v1/setup/nonce/${nonce}`,
+      headers: { authorization: `Bearer ${token}`, 'x-forwarded-for': '100.64.0.7' },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(consumeSeen(app.state, nonce)).toEqual({ forwardedFor: '100.64.0.7', remote: '127.0.0.1' });
+  });
+
+  it('closing it leaves the shared store and the admin listener working', async () => {
+    const app = await openApp();
+    const api = createApiApp(app.state);
+    await api.ready();
+    const token = app.state.store.issueDeviceToken('usb:TESTSERIAL');
+    await api.close();
+    expect(app.state.store.tokenValid(token)).toBe(true);
+    const listed = await app.inject({
+      method: 'GET',
+      url: '/v1/recordings',
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(listed.statusCode).toBe(200);
   });
 });

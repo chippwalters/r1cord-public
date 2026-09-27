@@ -53,6 +53,15 @@ let isQuitting = false;
 let backgroundStart = false;
 let lastStartupApply = null;
 let serverError = null;
+// Start screen: the window shows the local start page (index.html) until the core answers, and
+// admin pages load over it, so the window is never shown empty while the admin is on its way.
+const STARTING = { phase: 'starting', message: 'Starting R1CORD…', detail: '', note: '' };
+let startState = STARTING;
+let coreReady = false;
+let coreEverReady = false;
+let windowPainted = false;
+let revealPending = false;
+let pendingAdminPath = null;
 
 function logLine(message) {
   const stamp = `[${new Date().toISOString()}] ${message}\n`;
@@ -121,13 +130,15 @@ if (!gotLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
-    if (!hasFlag(argv, '--background')) showWindow();
+    if (!hasFlag(argv, '--background')) openAdmin('/admin');
     else if (mainWindow && !mainWindow.isDestroyed()) mainWindow.focus();
   });
 }
 
-function createWindow() {
+function createWindow(hash = '') {
   nativeTheme.themeSource = 'dark';
+  windowPainted = false;
+  revealPending = false;
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -142,8 +153,22 @@ function createWindow() {
     },
   });
 
+  // Shown only once the local start page has painted; then a waiting admin page may load.
   mainWindow.once('ready-to-show', () => {
-    if (!backgroundStart) mainWindow.show();
+    windowPainted = true;
+    if (!backgroundStart || revealPending) revealWindow();
+    flushAdmin();
+  });
+
+  // A failed admin load (the core went away mid-navigation) would leave an empty error page:
+  // go back to the start screen, which says what happened and offers Retry. The dashboard, not
+  // the failed URL, comes back: that may have been a form POST.
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3 || !isAdminUrl(validatedURL, settings.port)) return;
+    logLine(`[WARN] [Window] admin page did not load: ${errorDescription} (${errorCode})`);
+    pendingAdminPath = '/admin';
+    setStartState({ phase: 'error', message: 'The dashboard did not load.', detail: errorDescription || '' });
+    loadStartingPage();
   });
 
   mainWindow.on('close', (event) => {
@@ -174,36 +199,53 @@ function createWindow() {
     return { action: 'deny' };
   });
 
-  loadStartingPage();
+  loadStartingPage(hash);
 }
 
 function loadStartingPage(hash = '') {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(`${MAIN_WINDOW_VITE_DEV_SERVER_URL}${hash}`);
-  } else {
-    const file = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`);
-    mainWindow.loadFile(file, hash ? { hash: hash.replace(/^#/, '') } : undefined);
-  }
+  const loading = MAIN_WINDOW_VITE_DEV_SERVER_URL
+    ? mainWindow.loadURL(`${MAIN_WINDOW_VITE_DEV_SERVER_URL}${hash}`)
+    : mainWindow.loadFile(
+      path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
+      hash ? { hash: hash.replace(/^#/, '') } : undefined,
+    );
+  loading.catch((err) => logLine(`[WARN] [Window] start page: ${err.message}`));
 }
 
-function sendStatus(message) {
+function setStartState(next) {
+  startState = { ...STARTING, ...next };
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('sidecar:status', message);
+    mainWindow.webContents.send('sidecar:status', startState);
   }
 }
 
-function showWindow() {
+// Show the window now if its page has painted, else as soon as it has.
+function revealWindow() {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-  if (lastStatus) loadAdmin('/admin');
+  if (!windowPainted) {
+    revealPending = true;
+    return;
+  }
   mainWindow.show();
   mainWindow.focus();
 }
 
-function loadAdmin(pathname) {
+// Load the requested admin page once the core answers and the window has something on screen.
+function flushAdmin() {
+  if (!pendingAdminPath || !coreReady || !windowPainted) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const url = `${adminOrigin(settings.port)}${pendingAdminPath}`;
+  pendingAdminPath = null;
+  // Failures surface through did-fail-load.
+  mainWindow.loadURL(url).catch(() => {});
+}
+
+function openAdmin(pathname = '/admin') {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-  mainWindow.loadURL(`${adminOrigin(settings.port)}${pathname}`);
-  if (!backgroundStart || mainWindow.isVisible()) mainWindow.show();
+  pendingAdminPath = pathname;
+  flushAdmin();
+  revealWindow();
 }
 
 function notifyFinished(status) {
@@ -264,18 +306,9 @@ function refreshTray() {
 
 function trayActions() {
   return {
-    openDashboard: () => {
-      showWindow();
-      loadAdmin('/admin');
-    },
-    openDevices: () => {
-      showWindow();
-      loadAdmin('/admin/devices');
-    },
-    openSettings: () => {
-      showWindow();
-      loadAdmin('/admin/config');
-    },
+    openDashboard: () => openAdmin('/admin'),
+    openDevices: () => openAdmin('/admin/devices'),
+    openSettings: () => openAdmin('/admin/config'),
     toggleUsb: () => toggleFlag('usb'),
     toggleEmail: () => toggleFlag('email'),
     openRecordings: () => openFolder(lastStatus && lastStatus.recordings_folder),
@@ -310,10 +343,11 @@ async function openFolder(folder) {
 }
 
 function openPreferences() {
-  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-  loadStartingPage('#prefs');
-  mainWindow.show();
-  mainWindow.focus();
+  // The user asked for Preferences: a waiting admin page must not replace them.
+  pendingAdminPath = null;
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow('#prefs');
+  else loadStartingPage('#prefs');
+  revealWindow();
 }
 
 function settingsPayload() {
@@ -373,9 +407,14 @@ function probeUrlFor(port) {
   return `${adminOrigin(port)}/admin/api/status`;
 }
 
+function coreScriptError() {
+  const script = nodeCoreScript(app.getAppPath());
+  return fs.existsSync(script) ? null : `Node core not found: ${script}`;
+}
+
 function startCore() {
   if (serverError) {
-    sendStatus(serverError);
+    setStartState({ phase: 'error', message: 'R1CORD could not start.', detail: serverError });
     refreshTray();
     logLine(`[ERROR] [Core] ${serverError}`);
     return;
@@ -391,10 +430,7 @@ function startCore() {
       reveal: (filePath) => {
         if (filePath) shell.showItemInFolder(filePath);
       },
-      openDashboard: () => {
-        showWindow();
-        loadAdmin('/admin');
-      },
+      openDashboard: () => openAdmin('/admin'),
       requestExit: () => quitApp(),
       runModeChanged: (mode) => handleRunModeChanged(mode),
     },
@@ -407,28 +443,58 @@ function startCore() {
   logLine(`[INFO] [Core] audio decoder: ${ffmpegPath || 'ffmpeg on PATH'}`);
   // The core ships as plain files inside app.asar (the project folder in dev).
   const input = nodeCoreInput(settings, { appPath: app.getAppPath(), cwd: projectRoot(), ffmpegPath });
-  sendStatus('Starting the server…');
+  setStartState(STARTING);
   core.supervise(input, {
     probeUrl: probeUrlFor(settings.port),
     probeTimeoutMs: 90000,
     backoffMs: 500,
     maxBackoffMs: 8000,
     onReady: () => {
-      sendStatus('Server ready');
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        if (mainWindow.isVisible()) core.sendWindowOpen(true);
-        if (!backgroundStart) loadAdmin('/admin');
-      }
+      coreReady = true;
+      coreEverReady = true;
+      setStartState({ phase: 'ready', message: 'Opening R1CORD…' });
+      if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) core.sendWindowOpen(true);
+      if (!backgroundStart) openAdmin(pendingAdminPath || '/admin');
+      else flushAdmin();
       startPolling();
     },
-    onRestart: ({ delayMs }) => {
-      sendStatus(`Server stopped; restarting in ${Math.round(delayMs / 1000)}s…`);
+    onRestart: ({ delayMs, reason }) => {
+      coreReady = false;
+      setStartState({
+        phase: 'error',
+        message: coreEverReady ? 'The R1CORD server stopped.' : 'R1CORD could not start.',
+        detail: reason || '',
+        note: `Trying again in ${Math.max(1, Math.round(delayMs / 1000))} s…`,
+      });
     },
     onCleanExit: () => {
       logLine('[INFO] [Core] exited cleanly');
       quitApp();
     },
   });
+}
+
+// The start screen's Retry: start a core that could not be found, relaunch one waiting out its
+// restart backoff, or reload the admin page that failed while the core was up.
+function retryStart() {
+  if (serverError) {
+    serverError = coreScriptError();
+    if (!serverError) {
+      startCore();
+      refreshTray();
+    } else {
+      setStartState({ phase: 'error', message: 'R1CORD could not start.', detail: serverError });
+    }
+    return startState;
+  }
+  if (coreReady) {
+    setStartState({ phase: 'ready', message: 'Opening R1CORD…' });
+    pendingAdminPath = pendingAdminPath || '/admin';
+    flushAdmin();
+    return startState;
+  }
+  if (core && core.retryNow()) setStartState(STARTING);
+  return startState;
 }
 
 async function quitApp() {
@@ -461,6 +527,18 @@ function registerIpc() {
       },
     }),
   );
+  ipcMain.handle(
+    'core:start-state',
+    createHandler({
+      handler: async () => startState,
+    }),
+  );
+  ipcMain.handle(
+    'core:retry',
+    createHandler({
+      handler: async () => retryStart(),
+    }),
+  );
   ipcMain.handle('log:append', async (_event, payload) => {
     if (typeof payload === 'string') logLine(payload);
     else logLine(`[${(payload && payload.level) || 'INFO'}] [${(payload && payload.category) || 'Renderer'}] ${(payload && payload.message) || ''}`);
@@ -469,7 +547,9 @@ function registerIpc() {
 
 app.setAppUserModelId('com.chippwalters.r1cord');
 
-app.whenReady().then(() => {
+// A second instance only hands its launch to the first (second-instance above) and quits: it
+// must not make a tray icon, a window or a core of its own on the way out.
+if (gotLock) app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   const argv = parseArgv();
   backgroundStart = hasFlag(argv, '--background');
@@ -477,8 +557,7 @@ app.whenReady().then(() => {
   settings = normalizeSettings(applyCliOverrides(loaded, argv));
   if (!settings.noUsb && process.env.R1CORD_NO_USB === '1') settings.noUsb = true;
   if (!settings.noWorker && process.env.R1CORD_NO_WORKER === '1') settings.noWorker = true;
-  const script = nodeCoreScript(app.getAppPath());
-  if (!fs.existsSync(script)) serverError = `Node core not found: ${script}`;
+  serverError = coreScriptError();
   osAdapter = createRealOsAdapter({ isPackaged: app.isPackaged });
   startup = new StartupManager({
     os: osAdapter,
@@ -486,9 +565,10 @@ app.whenReady().then(() => {
     taskDir: path.join(app.getPath('userData'), 'tasks'),
   });
   registerIpc();
-  createTray();
+  // The start screen first, so it is loading while the core boots.
   if (!backgroundStart) createWindow();
   startCore();
+  createTray();
 });
 
 app.on('window-all-closed', () => {

@@ -77,6 +77,12 @@ data class PairingUiState(
     val error: String? = null,
     val serverName: String? = null,
 )
+/** The Rename dialog for one recording; [error] is shown in the dialog, which stays open. */
+data class RenameUiState(
+    val recordingId: String,
+    val busy: Boolean = false,
+    val error: String? = null,
+)
 data class AppUiState(
     val screen: Screen = Screen.HOME,
     val capture: CaptureState = CaptureState(),
@@ -98,6 +104,8 @@ data class AppUiState(
     val serverName: String = "",
     /** Published page shown by the in-app viewer (Screen.VIEWER). */
     val viewerUrl: String? = null,
+    /** Rename dialog; null when closed. */
+    val rename: RenameUiState? = null,
 ) {
     val selected: RecordingItem? get() = recordings.firstOrNull { it.id == selectedId }
     val isCapturing: Boolean get() = capture.status != CaptureStatus.IDLE

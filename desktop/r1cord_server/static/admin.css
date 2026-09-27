@@ -153,19 +153,23 @@ th.num { text-align: right; color: var(--muted); }
 table.compact td { padding: 9px 10px; }
 
 /* --- pills ------------------------------------------------------------------------------- */
+/* flex: none + min-width: max-content: a pill never shrinks or clips inside a flex row, and the
+   1.2 line height leaves room for glyphs that sit on or below the baseline. */
 .pill {
-  display: inline-block; font: 400 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
-  padding: 4px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--lede); white-space: nowrap;
+  display: inline-flex; align-items: center; flex: none; min-width: max-content; max-width: none; overflow: visible;
+  font: 400 10px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase; vertical-align: middle;
+  padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--lede); white-space: nowrap;
 }
 .pill-ok { color: var(--teal); border-color: var(--teal-line); }
 .pill-bad { color: var(--orange); border-color: var(--orange-line); }
 .pill-work { color: var(--text); border-color: var(--border); }
 .pill-work::before {
-  content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px; vertical-align: -1px;
+  content: ""; display: inline-block; flex: none; width: 7px; height: 7px; margin-right: 6px;
   border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%;
   animation: spin .9s linear infinite;
 }
 .pill-idle { color: var(--muted); }
+.pill-todo { color: var(--orange); border-color: var(--orange-line); background: var(--orange-tint); }
 
 /* --- buttons ----------------------------------------------------------------------------- */
 button, .btn {
@@ -312,3 +316,46 @@ pre.log {
 }
 ul { padding-left: 18px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* --- Setup: the numbered workflow and the Set up R1 run dialog ----------------------------- */
+ol.workflow { list-style: none; margin: 8px 0 0; padding: 0; }
+.wf-step { border-top: 1px solid var(--divider); }
+.wf-step:first-child { border-top: 0; }
+details.wf > summary.wf-head {
+  display: flex; align-items: center; gap: 12px; padding: 12px 4px; cursor: pointer; list-style: none;
+}
+details.wf > summary.wf-head::-webkit-details-marker { display: none; }
+.wf-num {
+  display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px;
+  border-radius: 50%; border: 1px solid var(--border); font: 600 12px/1 var(--mono); color: var(--text);
+}
+.wf-done .wf-num { border-color: var(--teal-line); color: var(--teal); }
+.wf-todo .wf-num { border-color: var(--orange); color: var(--orange); }
+.wf-blocked .wf-num, .wf-blocked .wf-title { color: var(--muted); }
+.wf-title { flex: none; color: var(--text); font-weight: 600; }
+.wf-summary {
+  flex: 1 1 auto; min-width: 0; color: var(--teal); font: 400 12px/1.4 var(--mono);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wf-head .pill { margin-left: auto; }
+.wf-body { padding: 0 4px 16px 40px; }
+.wf-body > :first-child { margin-top: 0; }
+ul.key-settings { margin: 0 0 8px; color: var(--lede); }
+.wf-device { margin-top: 14px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 6px; background: var(--row); }
+.wf-device .panel-head { margin-bottom: 10px; }
+.wf-device-name { margin: 0; font: 600 15px/1.2 var(--ui); color: var(--text); display: flex; align-items: center; gap: 10px; }
+.wf-pills { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.run-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+dialog.run-dialog {
+  width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 48px); overflow: auto;
+  background: var(--card); color: var(--body); border: 1px solid var(--border); border-radius: 8px;
+  padding: 22px 24px; box-shadow: 0 24px 64px rgba(0, 0, 0, .6);
+}
+dialog.run-dialog::backdrop { background: rgba(8, 9, 11, .78); backdrop-filter: blur(3px); }
+dialog.run-dialog h2 { margin: 0; }
+ol.steps { list-style: none; margin: 0 0 14px; padding: 0; }
+ol.steps li { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--divider); color: var(--lede); }
+ol.steps li:last-child { border-bottom: 0; }
+ol.steps li .pill { min-width: 92px; justify-content: center; }
+ol.steps li .caption { margin: 0; }

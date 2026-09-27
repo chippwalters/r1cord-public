@@ -12,9 +12,11 @@ import android.os.ParcelFileDescriptor
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import com.chippwalters.r1cord.device.MaintenanceGate
 import com.chippwalters.r1cord.model.CaptureState
 import com.chippwalters.r1cord.model.CaptureStatus
 import com.chippwalters.r1cord.storage.RecordingLibrary
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -52,11 +54,20 @@ class RecorderEngine(context: Context, private val library: RecordingLibrary) {
     private var bucketCount = 0
     private var bucketPeak = 0f
     internal var onIdle: (() -> Unit)? = null
+    // True from a successful MaintenanceGate.tryBegin(CAPTURE) until the session is back to IDLE,
+    // so STARTING through STOPPING (finalization included) all count as capture work.
+    private val captureHeld = AtomicBoolean(false)
 
     fun start() {
         if (state.value.status != CaptureStatus.IDLE) return
+        if (!MaintenanceGate.tryBegin(MaintenanceGate.Work.CAPTURE)) {
+            mutableState.value = CaptureState(error = "Device maintenance in progress. Try again shortly.")
+            return
+        }
+        captureHeld.set(true)
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             mutableState.value = CaptureState(error = "Microphone permission is required to record.")
+            releaseCapture()
             return
         }
         mutableState.value = CaptureState(status = CaptureStatus.STARTING)
@@ -72,8 +83,12 @@ class RecorderEngine(context: Context, private val library: RecordingLibrary) {
             val intent = Intent(context, RecordingService::class.java).setAction(action)
             if (foreground) ContextCompat.startForegroundService(context, intent) else context.startService(intent)
         } catch (error: Exception) {
-            if (foreground) mutableState.value = CaptureState(error = "Could not start microphone service: ${error.message}")
-            else scope.launch { commands.withLock { finish("Recorder service command failed: ${error.message}") } }
+            if (foreground) {
+                mutableState.value = CaptureState(error = "Could not start microphone service: ${error.message}")
+                releaseCapture()
+            } else {
+                scope.launch { commands.withLock { finish("Recorder service command failed: ${error.message}") } }
+            }
         }
     }
 
@@ -319,6 +334,12 @@ class RecorderEngine(context: Context, private val library: RecordingLibrary) {
         }
         mutableState.value = CaptureState(elapsedMs = duration, error = reason ?: failure ?: if (id != null && !saved) "Audio was interrupted or could not be published. Check the library." else null, lastCompletedId = if (saved) id else null)
         oldTicker?.cancel()
+        releaseCapture()
+    }
+
+    /** Ends the CAPTURE work exactly once per started session, whichever path reached IDLE. */
+    private fun releaseCapture() {
+        if (captureHeld.compareAndSet(true, false)) MaintenanceGate.end(MaintenanceGate.Work.CAPTURE)
     }
 
     private fun appendPeak(peak: Float) {

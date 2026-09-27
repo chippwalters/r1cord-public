@@ -1,13 +1,12 @@
 package com.chippwalters.r1cord.sync
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import android.util.Log
 import com.chippwalters.r1cord.model.PublishedPage
 import com.chippwalters.r1cord.model.resolvePages
 import java.io.IOException
 import java.io.InputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -16,6 +15,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -70,28 +70,36 @@ data class RecordingStatus(
 class OffloadClient internal constructor(
     private val serverUrl: () -> String,
     private val token: () -> String?,
-    private val hasValidatedNetwork: () -> Boolean,
+    private val routes: RouteSource,
     private val usbUrl: String = USB_URL,
+    /** Host lookup for requests; tests map a `*.ts.net` name to a loopback server. */
+    dns: Dns = Dns.SYSTEM,
 ) {
     constructor(context: Context) : this(
         serverUrl = { OffloadSettings.serverUrl(context.applicationContext) },
         token = { OffloadSettings.token(context.applicationContext) },
-        hasValidatedNetwork = { validatedNetwork(context.applicationContext) },
+        routes = deviceRoutes(context.applicationContext),
     )
 
     private val http = OkHttpClient.Builder()
+        .dns(dns)
         .connectTimeout(15, TimeUnit.SECONDS)
         .writeTimeout(120, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .build()
 
+    /** Route and configured server a job was created on; its later requests never switch servers. */
+    private data class Pinned(val route: Route, val configured: String)
+    private val pinned = ConcurrentHashMap<String, Pinned>()
+
     /**
-     * True when the next request would go over the USB cable (`adb reverse` loopback) because
-     * no validated internet network is up. The desktop server sets the reverse up for adopted
-     * devices while they are plugged in; the R1 never touches the radio.
+     * True when the next new request would go over the USB cable (`adb reverse` loopback): no
+     * configured URL, the configured server's path (Tailscale VPN for `*.ts.net`, internet
+     * otherwise) is down, or a `*.ts.net` server refuses a connection, while the reverse answers.
+     * May probe the loopback (~300 ms) and a tailnet server (~1.5 s); call off the main thread.
      */
-    fun usingUsb(): Boolean = !hasValidatedNetwork()
+    fun usingUsb(): Boolean = routes.choose(configuredUrl()) == RouteDecision.Use(Route.USB)
 
     suspend fun pair(code: String): PairResult = withContext(Dispatchers.IO) {
         val body = JSONObject().put("code", code.trim()).toString()
@@ -115,9 +123,11 @@ class OffloadClient internal constructor(
             .put("job", jobJson(job))
             .put("metadata", JSONObject(metadataJson))
             .toString()
-        val req = request("POST", listOf("v1", "jobs"), jsonBody(payload))
+        // A new attempt always re-decides the route; the job is then pinned to it.
+        val target = resolve(jobId = null)
+        val req = request("POST", listOf("v1", "jobs"), jsonBody(payload), target = target)
         val response = execute(req)
-        response.use { result ->
+        val created = response.use { result ->
             val text = result.body?.string().orEmpty()
             when (result.code) {
                 200, 202 -> parseJobCreated(text, resumed = false)
@@ -133,12 +143,14 @@ class OffloadClient internal constructor(
                 else -> throw errorOf(result.code, text, "Could not create the upload job.").logged(req, result.code)
             }
         }
+        pin(created.jobId, target)
+        created
     }
 
     // GET with a JSON body, not HEAD on the file path: Cloudflare rewrites HEAD to GET for
     // paths ending in cacheable extensions such as .jpg (observed 2026-09-21).
     suspend fun received(jobId: String, name: String): Long = withContext(Dispatchers.IO) {
-        val req = request("GET", listOf("v1", "jobs", jobId, "files", name, "received"))
+        val req = request("GET", listOf("v1", "jobs", jobId, "files", name, "received"), jobId = jobId)
         val response = execute(req)
         response.use { result ->
             val text = result.body?.string().orEmpty()
@@ -179,6 +191,7 @@ class OffloadClient internal constructor(
             listOf("v1", "jobs", jobId, "files", name),
             body,
             query = listOf("offset" to offset.toString()),
+            jobId = jobId,
         )
         val response = execute(req)
         response.use { result ->
@@ -191,11 +204,11 @@ class OffloadClient internal constructor(
     }
 
     suspend fun commit(jobId: String): JobCreated = withContext(Dispatchers.IO) {
-        val req = request("POST", listOf("v1", "jobs", jobId, "commit"), EMPTY)
+        val req = request("POST", listOf("v1", "jobs", jobId, "commit"), EMPTY, jobId = jobId)
         val response = execute(req)
         response.use { result ->
             val text = result.body?.string().orEmpty()
-            if (result.code == 200) parseJobCreated(text, resumed = false)
+            if (result.code == 200) parseJobCreated(text, resumed = false).also { pinned.remove(jobId) }
             else throw errorOf(result.code, text, "Commit failed.").logged(req, result.code)
         }
     }
@@ -220,6 +233,19 @@ class OffloadClient internal constructor(
                 )
             }
         }
+    }
+
+    /**
+     * Proves to the desktop which tailnet peer this R1 is: `GET /v1/setup/nonce/<nonce>` with the
+     * bearer token over the currently chosen route. Returns the HTTP status (204 = recognised).
+     */
+    suspend fun setupNonce(nonce: String): Int = setupNonceOnRoute(nonce).first
+
+    /** [setupNonce] plus the route it travelled, so the setup provider can report it. */
+    internal suspend fun setupNonceOnRoute(nonce: String): Pair<Int, Route> = withContext(Dispatchers.IO) {
+        val target = resolve(jobId = null)
+        val req = request("GET", listOf("v1", "setup", "nonce", nonce), target = target)
+        execute(req).use { result -> result.code to target.route }
     }
 
     private fun jobJson(job: JobRequest): JSONObject {
@@ -272,8 +298,10 @@ class OffloadClient internal constructor(
         body: RequestBody? = null,
         authenticated: Boolean = true,
         query: List<Pair<String, String>> = emptyList(),
+        jobId: String? = null,
+        target: Pinned = resolve(jobId),
     ): Request {
-        val url = endpoint(segments, query)
+        val url = endpoint(target, segments, query)
         val builder = Request.Builder().url(url)
         when (method) {
             "GET" -> builder.get()
@@ -290,13 +318,43 @@ class OffloadClient internal constructor(
         return builder.build()
     }
 
-    private fun endpoint(segments: List<String>, query: List<Pair<String, String>>): HttpUrl {
-        val base = if (hasValidatedNetwork()) {
-            val configured = serverUrl().trim().trimEnd('/')
-            if (configured.isEmpty()) throw OffloadException("Set the server URL in Settings.")
-            configured
-        } else {
-            usbUrl
+    private fun configuredUrl(): String = serverUrl().trim().trimEnd('/')
+
+    /**
+     * The route for a request. Requests of a job created on a route stay on that route and
+     * server; when it has gone away they fail instead of silently switching servers mid-upload.
+     */
+    private fun resolve(jobId: String?): Pinned {
+        val configured = configuredUrl()
+        val pin = jobId?.let { pinned[it] }
+        if (pin != null) {
+            if (pin.configured != configured) {
+                throw OffloadException("Server settings changed during this upload. Send again.", code = ROUTE_CHANGED)
+            }
+            if (!routes.isAvailable(pin.route, configured)) {
+                val message = when (pin.route) {
+                    Route.USB -> "The USB connection to the desktop was lost during this upload. Plug back in and Send again to resume."
+                    Route.CONFIGURED -> "The network connection to the desktop was lost during this upload. Send again to resume."
+                }
+                throw OffloadException(message, code = ROUTE_CHANGED)
+            }
+            return pin
+        }
+        return when (val decision = routes.choose(configured)) {
+            is RouteDecision.Use -> Pinned(decision.route, configured)
+            is RouteDecision.Unavailable -> throw OffloadException(decision.message)
+        }
+    }
+
+    private fun pin(jobId: String, target: Pinned) {
+        if (pinned.size >= MAX_PINNED) pinned.clear()
+        pinned[jobId] = target
+    }
+
+    private fun endpoint(target: Pinned, segments: List<String>, query: List<Pair<String, String>>): HttpUrl {
+        val base = when (target.route) {
+            Route.USB -> usbUrl
+            Route.CONFIGURED -> target.configured.ifEmpty { throw OffloadException("Set the server URL in Settings.") }
         }
         val builder = base.toHttpUrlOrNull()?.newBuilder()
             ?: throw OffloadException("Server URL is not valid. Check it in Settings.")
@@ -322,7 +380,8 @@ class OffloadClient internal constructor(
                     call.isCanceled() -> OffloadException("Upload cancelled.")
                     isUsbBase(url) -> OffloadException(NO_ROUTE)
                     else -> OffloadException(
-                        "Desktop server is not reachable at ${url.host}. Check that the server and its tunnel are running.",
+                        "Desktop server is not reachable at ${url.host}. Check that R1CORD Desktop is running, " +
+                            "and that Tailscale is on for this R1 and the PC.",
                         code = SERVER_UNREACHABLE,
                     )
                 }
@@ -377,9 +436,10 @@ class OffloadClient internal constructor(
     companion object {
         const val MAX_CHUNK = 64L * 1024 * 1024
         const val SERVER_UNREACHABLE = "server_unreachable"
-        /** Device-side port the desktop server reverse-forwards (`adb reverse tcp:8765 tcp:<listen_port>`). */
-        private const val USB_HOST = "127.0.0.1"
-        private const val USB_URL = "http://$USB_HOST:8765"
+        /** A job's pinned route or server went away mid-upload; a new Send re-decides the route. */
+        const val ROUTE_CHANGED = "route_changed"
+        private const val USB_URL = "http://$USB_HOST:$USB_PORT"
+        private const val MAX_PINNED = 64
         private const val UNPAIRED = "Not paired or token revoked. Pair again in Settings."
         const val NO_ROUTE = "No internet. Turn Wi-Fi on, or plug into the desktop with USB mode on."
         private const val TAG = "R1CORD/Sync"
@@ -390,13 +450,6 @@ class OffloadClient internal constructor(
             override fun contentType() = null
             override fun contentLength() = 0L
             override fun writeTo(sink: BufferedSink) {}
-        }
-
-        private fun validatedNetwork(context: Context): Boolean {
-            val manager = context.getSystemService(ConnectivityManager::class.java)
-            val caps = manager.activeNetwork?.let { manager.getNetworkCapabilities(it) } ?: return false
-            return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
         }
     }
 }

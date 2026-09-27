@@ -48,15 +48,20 @@ language model.
 Android 12 vendor/VNDK 31 base. It is an ordinary Android device with GMS: you can sideload APKs,
 use ADB, set a default Home app. R1CORD then installs like any other APK (`adb install`), and you
 can set it as the default Home app so the R1 boots straight into it. The APK comes from wherever
-you got this guide.
+you got this guide. Its small **R1CORD controls** helper depends on this image's test-keys signing
+— see Step 8a below.
 
 **Cost, non-negotiable:**
 
 - **All user data is erased.** Unlocking the bootloader wipes userdata by design.
 - **Verified boot is off** on the installed slot. The bootloader stays unlocked.
 - **You will see an orange "bootloader unlocked" warning** for about five seconds on every boot.
-- **Google will nag** that the device isn't certified until you register it at
-  <https://www.google.com/android/uncertified>.
+- **Google will nag** that the device isn't certified — a notification with a sound, repeated —
+  until you register it at <https://www.google.com/android/uncertified>. The notification comes
+  from Google Play Services; to silence it without registering, deny Play Services the
+  notification permission:
+  `adb shell pm revoke com.google.android.gms android.permission.POST_NOTIFICATIONS` then
+  `adb shell pm set-permission-flags com.google.android.gms android.permission.POST_NOTIFICATIONS user-set user-fixed`.
 - **Your warranty is permanently void — before you flash anything.** The sanctioned route starts
   with a button in rabbithole labelled *"void warranty and enable developer mode"*, and Rabbit
   states support will not help you unlock, flash, or return to stock. See step 0. A successful
@@ -354,6 +359,49 @@ Then, for an appliance-style setup:
 adb shell locksettings set-disabled true    # no swipe lock
 # select your app as default Home in Settings, or via the app's own settings
 ```
+
+### Step 8a — The R1CORD controls helper needs this image
+
+Install R1CORD itself as the R1CORD user guide describes (by hand with `adb install`, or with R1CORD
+Desktop's **Set up R1**). R1CORD comes with a tiny second APK, **R1CORD controls**
+(`com.chippwalters.r1cord.controls`), that lets it switch Wi-Fi and power the R1 off directly. It
+has no icon and holds no data.
+
+**That helper works only on this exact kind of image.** It is signed with the public AOSP android13
+platform *test* key — the same key this `userdebug/test-keys` GSI's framework is signed with.
+Android grants the signature-level permissions it needs (`SHUTDOWN`, `NETWORK_SETTINGS`) only to
+apps signed with the framework's own key. On a release-keys build, or any image signed differently,
+it installs but gets none of them. The framework certificate measured on this R1:
+
+```powershell
+adb pull /system/framework/framework-res.apk
+apksigner verify --print-certs framework-res.apk
+# certificate SHA-256 digest must be c8a2e9bccf597c2fb6dc66bee293fc13f2fc47ec77bc6b2b0d52c11f51192ab8
+```
+
+(`apksigner` is in Google's Android SDK build-tools, not platform-tools; this check is optional —
+the permission check below is what matters.)
+
+It installs like any other APK: **no root, no remounting `/system`, no Magisk** — an ordinary `/data`
+install.
+
+```powershell
+adb install R1CORD-controls-1.0.0.apk        # later versions: adb install -r <file>
+adb shell dumpsys package com.chippwalters.r1cord.controls | findstr "SHUTDOWN NETWORK_SETTINGS"
+```
+
+The output lists each permission once as *requested*, then with its state under *install
+permissions*. Those state lines must read:
+
+```text
+android.permission.SHUTDOWN: granted=true
+android.permission.NETWORK_SETTINGS: granted=true
+```
+
+On this project's R1, `REBOOT` and `CHANGE_WIFI_STATE` also showed `granted=true`. If either state
+line says `granted=false`, or is missing, the image is not the one this guide installs and the helper
+cannot do its job; remove it again with `adb uninstall com.chippwalters.r1cord.controls` (it holds
+nothing). R1CORD keeps working without it, using Android's own Wi-Fi panel and power menu instead.
 
 ### Step 9 — Put the host back
 

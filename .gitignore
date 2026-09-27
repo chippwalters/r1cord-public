@@ -1,6 +1,7 @@
 # Build outputs
 /build/
 app/build/
+device-controls/build/
 dist/
 .gradle/
 .kotlin/
@@ -9,6 +10,10 @@ dist/
 local.properties
 *.jks
 *.keystore
+*.pk8
+*.pem
+*.p12
+*.pfx
 gradle.properties.local
 
 # R1CORD Desktop (Electron / Node)
@@ -17,6 +22,8 @@ desktop/out/
 desktop/.vite/
 # 99 MB, downloaded by the builder: see desktop/forge.config.cjs
 desktop/binaries/win32/ffmpeg.exe
+# The published R1CORD and helper APKs the builder copies in for bundling: see README.md
+desktop/resources/apk/
 
 # Downloaded tools
 platform-tools/

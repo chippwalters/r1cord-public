@@ -11,6 +11,15 @@ function nextBackoff(current, max) {
   return Math.min(start * 2, max);
 }
 
+// The line a crashed sidecar's stderr is about: its first line that is not a stack frame.
+function errorLine(text) {
+  for (const raw of String(text == null ? '' : text).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (line && !/^at\s/.test(line)) return line;
+  }
+  return '';
+}
+
 function payloadOf(message) {
   if (message == null || typeof message !== 'object') return message;
   if (Object.prototype.hasOwnProperty.call(message, 'type')) return message;
@@ -55,6 +64,8 @@ class SidecarManager {
     this.processes = new Map();
     this._stopping = new Set();
     this._supervise = new Map();
+    // Why each sidecar last failed (its stderr error line, or how it spawned/exited), for onRestart.
+    this._lastError = new Map();
   }
 
   getDescriptor(name) {
@@ -99,11 +110,13 @@ class SidecarManager {
     }
 
     const options = this.buildProcessOptions(name, input);
+    this._lastError.delete(name);
     let child;
     try {
       child = this.spawnImpl(options.executable, options.args, options.spawnOptions);
     } catch (err) {
       this.logger.error?.(`[${name}] spawn failed`, { error: err.message });
+      this._lastError.set(name, `spawn failed: ${err.message}`);
       this._noteDeath(name, 1, null);
       return null;
     }
@@ -121,7 +134,9 @@ class SidecarManager {
     const pipeLog = (chunk) => {
       const text = redactSecrets(String(chunk == null ? '' : chunk).trim());
       if (text) this.logger.info?.(`[${name}] ${text}`);
+      return text;
     };
+    const pipeError = (chunk) => this._noteStderr(name, pipeLog(chunk));
     const attachStdio = () => {
       if (child.stdout && !child.stdout._r1cordLogged) {
         child.stdout._r1cordLogged = true;
@@ -129,7 +144,7 @@ class SidecarManager {
       }
       if (child.stderr && !child.stderr._r1cordLogged) {
         child.stderr._r1cordLogged = true;
-        child.stderr.on('data', pipeLog);
+        child.stderr.on('data', pipeError);
       }
     };
     attachStdio();
@@ -150,10 +165,24 @@ class SidecarManager {
     child.on('error', (err) => {
       const error = err && err.message ? err.message : String(err);
       this.logger.error?.(`[${name}] spawn failed`, { error });
+      this._lastError.set(name, `spawn failed: ${error}`);
       settle(1, null, 'error');
     });
 
     return child;
+  }
+
+  // A stderr error line becomes the failure reason; one that lands after the exit was already
+  // reported (stdio can trail the exit event) re-sends onRestart with the better reason.
+  _noteStderr(name, text) {
+    const line = errorLine(text);
+    if (!line) return;
+    this._lastError.set(name, line);
+    const spec = this._supervise.get(name);
+    if (spec && spec.restartPending && spec.restartInfo && typeof spec.onRestart === 'function') {
+      spec.restartInfo = { ...spec.restartInfo, reason: line };
+      spec.onRestart(spec.restartInfo);
+    }
   }
 
   _kill(name) {
@@ -184,21 +213,30 @@ class SidecarManager {
     return this.processes.has(name);
   }
 
+  /**
+   * Resolve once the sidecar answers `url` with a 2xx, or `readyPromise` resolves; whichever
+   * is first. The ready message cuts a pending probe or poll wait short.
+   */
   async waitUntilReady({ url, timeoutMs = 60000, intervalMs = 200, isAborted, readyPromise } = {}) {
     if (!url && !readyPromise) throw new Error('readiness url is required');
     const started = this.now();
     let lastError = 'timeout';
     let ready = false;
+    let readySignal = null;
     if (readyPromise) {
-      Promise.resolve(readyPromise).then(
-        () => {
-          ready = true;
-        },
-        (err) => {
-          lastError = err && err.message ? err.message : String(err);
-        },
-      );
+      readySignal = new Promise((resolve) => {
+        Promise.resolve(readyPromise).then(
+          () => {
+            ready = true;
+            resolve();
+          },
+          (err) => {
+            lastError = err && err.message ? err.message : String(err);
+          },
+        );
+      });
     }
+    const orReady = (promise) => (readySignal ? Promise.race([promise, readySignal]) : promise);
     while (this.now() - started < timeoutMs) {
       if (ready) return true;
       if (isAborted && isAborted()) {
@@ -206,14 +244,15 @@ class SidecarManager {
       }
       if (url) {
         try {
-          const res = await this.fetchImpl(url);
+          const res = await orReady(this.fetchImpl(url));
+          if (ready) return true;
           if (res && res.ok) return true;
           lastError = `HTTP ${res ? res.status : 'no response'}`;
         } catch (err) {
           lastError = err && err.message ? err.message : String(err);
         }
       }
-      await this.delay(intervalMs);
+      await orReady(this.delay(intervalMs));
       if (ready) return true;
       if (isAborted && isAborted()) {
         throw new Error('sidecar exited before ready');
@@ -258,6 +297,9 @@ class SidecarManager {
     const spec = this._supervise.get(name);
     if (!spec) return;
     spec.generation = (spec.generation || 0) + 1;
+    if (!spec.lastFailure) {
+      spec.lastFailure = signal ? `stopped (${signal})` : `exited with code ${code}`;
+    }
     if (code === 0 && !signal) {
       this._supervise.delete(name);
       if (typeof spec.onCleanExit === 'function') spec.onCleanExit();
@@ -274,6 +316,7 @@ class SidecarManager {
     spec.readyPromise = new Promise((resolve) => {
       spec.resolveReady = resolve;
     });
+    spec.lastFailure = null;
     try {
       if (!this.processes.has(name)) {
         const child = this.start(name, spec.input);
@@ -297,6 +340,7 @@ class SidecarManager {
     } catch (err) {
       if (spec.generation !== generation || this._stopping.has(name) || spec.restartPending) return;
       this.logger.error?.(`[${name}] failed to start`, { error: err.message });
+      spec.lastFailure = err.message;
       if (this.processes.has(name)) this._kill(name);
       this._scheduleRestart(name);
     }
@@ -309,12 +353,33 @@ class SidecarManager {
     spec.restartPending = true;
     spec.generation = (spec.generation || 0) + 1;
     const wait = spec.currentBackoff;
-    if (typeof spec.onRestart === 'function') spec.onRestart({ delayMs: wait });
-    await this.delay(wait);
-    spec.currentBackoff = nextBackoff(spec.currentBackoff, spec.maxBackoffMs);
+    spec.restartInfo = { delayMs: wait, reason: this._lastError.get(name) || spec.lastFailure || '' };
+    if (typeof spec.onRestart === 'function') spec.onRestart(spec.restartInfo);
+    await new Promise((resolve) => {
+      spec.wakeRestart = resolve;
+      Promise.resolve(this.delay(wait)).then(resolve, resolve);
+    });
+    spec.wakeRestart = null;
+    spec.restartInfo = null;
+    spec.currentBackoff = spec.retryRequested ? spec.backoffMs : nextBackoff(spec.currentBackoff, spec.maxBackoffMs);
+    spec.retryRequested = false;
     spec.restartPending = false;
     if (this._stopping.has(name) || !this._supervise.has(name)) return;
     await this._launch(name);
+  }
+
+  /**
+   * Skip the backoff wait of a supervised sidecar that failed and relaunch it now, with the
+   * backoff reset. False when it is not waiting to restart (running, starting or not supervised).
+   */
+  retryNow(name) {
+    const spec = this._supervise.get(name);
+    if (!spec || this._stopping.has(name) || !spec.restartPending || typeof spec.wakeRestart !== 'function') {
+      return false;
+    }
+    spec.retryRequested = true;
+    spec.wakeRestart();
+    return true;
   }
 
   async stopGracefully(name, { shutdown, timeoutMs = 8000 } = {}) {

@@ -1,9 +1,13 @@
 package com.chippwalters.r1cord
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.net.wifi.WifiManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -29,8 +33,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.lifecycleScope
+import com.chippwalters.r1cord.device.DeviceControls
+import com.chippwalters.r1cord.device.MaintenanceGate
 import com.chippwalters.r1cord.device.PowerMenuService
 import com.chippwalters.r1cord.recording.RecorderSettings
 import com.chippwalters.r1cord.model.Screen
@@ -57,6 +65,11 @@ class MainActivity : ComponentActivity() {
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
         if (result[Manifest.permission.RECORD_AUDIO] == false) model.showError("Microphone permission denied. Recording is unavailable until permission is granted.")
     }
+    private val controlsLazy = lazy { DeviceControls(applicationContext) }
+    /** Platform-signed helper for power off and the Wi-Fi radio; bound while this activity lives. */
+    private val deviceControls by controlsLazy
+    /** Settings panels need a calling package, so they are started for a result. */
+    private val wifiPanel = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,9 +126,14 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         hideSystemBars()
         brighten()
+        deviceControls.connect()
     }
     override fun onPause() { handler.removeCallbacks(dim); super.onPause() }
-    override fun onDestroy() { handler.removeCallbacksAndMessages(null); super.onDestroy() }
+    override fun onDestroy() {
+        handler.removeCallbacksAndMessages(null)
+        if (controlsLazy.isInitialized()) deviceControls.close()
+        super.onDestroy()
+    }
     override fun onUserInteraction() { super.onUserInteraction(); brighten() }
 
     private fun brighten() {
@@ -151,9 +169,89 @@ class MainActivity : ComponentActivity() {
         var error by remember { mutableStateOf<String?>(null) }
         var confirmPowerOff by remember { mutableStateOf(false) }
         val batteryUi by model.state.collectAsState()
+        val scope = rememberCoroutineScope()
+        val controls by deviceControls.status.collectAsState()
+        var wifiState by remember { mutableIntStateOf(localWifiState()) }
+        var wifiRequest by remember { mutableStateOf(false) }
+        var wifiNote by remember { mutableStateOf<String?>(null) }
+        var shutdownRequest by remember { mutableStateOf(false) }
+        var powerMenuFallback by remember { mutableStateOf(false) }
+        var poweringOff by remember { mutableStateOf(false) }
         fun openSystemPage(action: String) {
             runCatching { startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 .onFailure { error = it.message ?: "Android could not open this settings page." }
+        }
+        fun refreshWifi() {
+            scope.launch {
+                val viaHelper = if (deviceControls.status.value == DeviceControls.Status.READY) deviceControls.wifiState() else null
+                wifiState = viaHelper ?: localWifiState()
+            }
+        }
+        fun changeWifi(on: Boolean) {
+            wifiNote = null
+            if (!on && uploadActive()) {
+                wifiNote = "Wait for the upload to finish."
+                return
+            }
+            wifiRequest = true
+            scope.launch {
+                val result = deviceControls.setWifi(on)
+                wifiRequest = false
+                wifiNote = when (result) {
+                    DeviceControls.Result.ACCEPTED -> null
+                    DeviceControls.Result.REFUSED -> "Android refused the Wi-Fi change."
+                    DeviceControls.Result.DENIED -> controlsProblem(DeviceControls.Status.DENIED)
+                    DeviceControls.Result.ERROR -> "Wi-Fi change failed."
+                    DeviceControls.Result.UNAVAILABLE -> "${controlsProblem(deviceControls.status.value)} Use Wi-Fi networks."
+                }
+                refreshWifi()
+            }
+        }
+        fun openWifiNetworks() {
+            error = null
+            val panel = runCatching { wifiPanel.launch(Intent(Settings.Panel.ACTION_WIFI)) }
+            if (panel.isFailure) openSystemPage(Settings.ACTION_WIFI_SETTINGS)
+        }
+        fun openPowerMenu() {
+            if (PowerMenuService.showPowerMenu()) settingsOpen = false
+            else {
+                error = "Power menu blocked. Enable R1CORD in Accessibility."
+                openSystemPage(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+            }
+        }
+        fun powerOffWithHelper() {
+            (application as R1cordApplication).playback.stop()
+            shutdownRequest = true
+            scope.launch {
+                val result = deviceControls.shutdown()
+                shutdownRequest = false
+                if (result == DeviceControls.Result.ACCEPTED) poweringOff = true
+                else {
+                    val reason = when (result) {
+                        DeviceControls.Result.UNAVAILABLE -> controlsProblem(deviceControls.status.value)
+                        DeviceControls.Result.DENIED -> controlsProblem(DeviceControls.Status.DENIED)
+                        else -> "R1CORD controls could not power off."
+                    }
+                    error = "$reason ${powerMenuGuidance()}"
+                    powerMenuFallback = true
+                }
+            }
+        }
+        DisposableEffect(Unit) {
+            // WIFI_STATE_CHANGED is sticky and protected: the current state arrives on registration.
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    wifiState = intent.getIntExtra(WifiManager.EXTRA_WIFI_STATE, WifiManager.WIFI_STATE_UNKNOWN)
+                }
+            }
+            ContextCompat.registerReceiver(this@MainActivity, receiver,
+                IntentFilter(WifiManager.WIFI_STATE_CHANGED_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
+            val resumed = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) refreshWifi() }
+            lifecycle.addObserver(resumed)
+            onDispose {
+                lifecycle.removeObserver(resumed)
+                unregisterReceiver(receiver)
+            }
         }
         MaterialTheme(colorScheme = RecorderColors, typography = RecorderTypography) {
             AlertDialog(
@@ -168,6 +266,28 @@ class MainActivity : ComponentActivity() {
                 },
                 text = {
                     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        val wifiOn = wifiState == WifiManager.WIFI_STATE_ENABLED || wifiState == WifiManager.WIFI_STATE_ENABLING
+                        val wifiSettling = wifiState == WifiManager.WIFI_STATE_ENABLING || wifiState == WifiManager.WIFI_STATE_DISABLING
+                        val wifiDetail = when {
+                            wifiState == WifiManager.WIFI_STATE_ENABLING -> "Turning on…"
+                            wifiState == WifiManager.WIFI_STATE_DISABLING -> "Turning off…"
+                            wifiRequest -> "Asking R1CORD controls…"
+                            wifiState == WifiManager.WIFI_STATE_UNKNOWN -> "State unknown"
+                            else -> null
+                        }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Wi-Fi", style = MaterialTheme.typography.titleMedium)
+                                if (wifiDetail != null) Text(wifiDetail, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            // Always the real radio state; a refused request leaves it where it is.
+                            Switch(checked = wifiOn, enabled = !wifiRequest && !wifiSettling,
+                                onCheckedChange = { changeWifi(it) })
+                        }
+                        if (wifiNote != null) Text(wifiNote!!, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error)
+                        Button(onClick = { openWifiNetworks() }, modifier = Modifier.fillMaxWidth()) { Text("Wi-Fi networks") }
                         var noiseCancel by remember { mutableStateOf(RecorderSettings.noiseCancellation(this@MainActivity)) }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("Noise cancelling", style = MaterialTheme.typography.titleMedium,
@@ -279,12 +399,20 @@ class MainActivity : ComponentActivity() {
                         Button(onClick = { openSystemPage(Settings.ACTION_HOME_SETTINGS) }, modifier = Modifier.fillMaxWidth()) { Text("Home app") }
                         Button(onClick = {
                             error = null
-                            if (model.state.value.isCapturing) error = "Stop recording first."
+                            powerMenuFallback = false
+                            val blocked = powerOffBlocker()
+                            if (blocked != null) error = blocked
                             else confirmPowerOff = true
-                        }, modifier = Modifier.fillMaxWidth(),
+                        }, enabled = !shutdownRequest, modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                                contentColor = MaterialTheme.colorScheme.onSurface)) { Text("Power off") }
+                                contentColor = MaterialTheme.colorScheme.onSurface)) {
+                            Text(if (shutdownRequest) "Requesting power off…" else "Power off")
+                        }
+                        if (powerMenuFallback) Button(onClick = { openPowerMenu() }, modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                                contentColor = MaterialTheme.colorScheme.onSurface)) { Text("Open Android power menu") }
                         Text("R1CORD ${BuildConfig.VERSION_NAME}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -293,28 +421,67 @@ class MainActivity : ComponentActivity() {
                 },
                 confirmButton = { TextButton(onClick = { settingsOpen = false }) { Text("Done") } },
             )
-            if (confirmPowerOff) AlertDialog(
-                onDismissRequest = { confirmPowerOff = false },
-                title = { Text("Power off?") },
-                text = {
-                    Text(
-                        if (PowerMenuService.isEnabled(this@MainActivity)) "The Android power menu opens next."
-                        else "Enable R1CORD power menu in Accessibility first.",
-                    )
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        confirmPowerOff = false
-                        if (PowerMenuService.showPowerMenu()) settingsOpen = false
-                        else {
-                            error = "Power menu blocked. Enable R1CORD in Accessibility."
-                            openSystemPage(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                        }
-                    }) { Text(if (PowerMenuService.isEnabled(this@MainActivity)) "Open power menu" else "Open Accessibility") }
-                },
-                dismissButton = { TextButton(onClick = { confirmPowerOff = false }) { Text("Cancel") } },
+            if (confirmPowerOff) {
+                // CONNECTING settles within DeviceControls' wait; anything else cannot power off directly.
+                val helperPath = controls == DeviceControls.Status.READY || controls == DeviceControls.Status.CONNECTING
+                AlertDialog(
+                    onDismissRequest = { confirmPowerOff = false },
+                    title = { Text("Power off R1?") },
+                    text = {
+                        Text(
+                            if (helperPath) "Recordings are saved. The R1 turns off now."
+                            else "${controlsProblem(controls)} ${powerMenuGuidance()}",
+                        )
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            confirmPowerOff = false
+                            val blocked = powerOffBlocker()
+                            when {
+                                blocked != null -> error = blocked
+                                helperPath -> powerOffWithHelper()
+                                else -> openPowerMenu()
+                            }
+                        }) { Text(if (helperPath) "Power off" else "Open Android power menu") }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmPowerOff = false }) { Text("Cancel") } },
+                )
+            }
+            // Shown only after the helper accepted the request.
+            if (poweringOff) AlertDialog(
+                onDismissRequest = { },
+                title = { Text("Powering off…") },
+                text = { Text("Recordings are saved.") },
+                confirmButton = { TextButton(onClick = { poweringOff = false }) { Text("Close") } },
             )
         }
+    }
+
+    private fun localWifiState(): Int =
+        runCatching { getSystemService(WifiManager::class.java)?.wifiState }.getOrNull() ?: WifiManager.WIFI_STATE_UNKNOWN
+
+    private fun uploadActive(): Boolean =
+        (MaintenanceGate.state.value.active[MaintenanceGate.Work.UPLOAD] ?: 0) > 0
+
+    /** Why power off must wait, or null when it may proceed. */
+    private fun powerOffBlocker(): String? {
+        if (model.state.value.isCapturing) return "Stop recording first."
+        val gate = MaintenanceGate.state.value
+        if (gate.maintenance) return gate.maintenanceReason ?: "Desktop setup in progress."
+        if (MaintenanceGate.isBusy()) return MaintenanceGate.busyReason() ?: "Busy. Try again shortly."
+        return null
+    }
+
+    private fun powerMenuGuidance(): String =
+        if (PowerMenuService.isEnabled(this)) "The Android power menu opens next."
+        else "Enable R1CORD power menu in Accessibility first."
+
+    private fun controlsProblem(status: DeviceControls.Status): String = when (status) {
+        DeviceControls.Status.ABSENT -> "R1CORD controls is not installed."
+        DeviceControls.Status.UNTRUSTED -> "R1CORD controls has an unexpected signature."
+        DeviceControls.Status.CONNECTING -> "R1CORD controls is not responding."
+        DeviceControls.Status.DENIED -> "R1CORD controls refused this app."
+        DeviceControls.Status.READY -> "R1CORD controls did not respond."
     }
 
     companion object {

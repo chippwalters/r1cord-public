@@ -197,6 +197,18 @@ function scripts(refresh) {
 `;
 }
 
+// The Updates banner (first-run consent question or "update available"), when that page exists.
+function updateBanner(page) {
+  let updates;
+  try {
+    updates = require('./updates');
+  } catch (error) {
+    if (error && error.code === 'MODULE_NOT_FOUND') return '';
+    throw error;
+  }
+  return typeof updates.updateBanner === 'function' ? updates.updateBanner(page) : '';
+}
+
 /**
  * @param {object} page path, config, rows, running, runningLabel, queued, usb, device, issues,
  *   local, notice, deleted, refresh
@@ -222,6 +234,7 @@ function dashboard(page) {
   <p class="empty">No recordings yet. Plug in an adopted R1, or press Send on one.</p>
   `;
   const body = html`
+${updateBanner(page)}
 ${notice ? html`<p class="banner banner-bad">${notice}</p>` : ''}
 ${deleted ? html`<p class="banner banner-ok">Deleted ${deleted} from this PC. The R1 keeps its own copy.</p>` : ''}
 

@@ -11,8 +11,8 @@ android {
         applicationId = "com.chippwalters.r1cord"
         minSdk = 33
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.3.3"
+        versionCode = 17
+        versionName = "0.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // Release signing credentials live in ~/.gradle/gradle.properties (never in this repo).
@@ -28,7 +28,7 @@ android {
             }
         }
     }
-    buildFeatures { compose = true; buildConfig = true }
+    buildFeatures { compose = true; buildConfig = true; aidl = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     kotlinOptions { jvmTarget = "17" }
     buildTypes {

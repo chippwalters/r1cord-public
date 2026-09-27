@@ -16,8 +16,12 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.chippwalters.r1cord.R1cordApplication
+import com.chippwalters.r1cord.device.MaintenanceGate
 import com.chippwalters.r1cord.model.*
 import com.chippwalters.r1cord.recording.RecorderSettings
+import com.chippwalters.r1cord.storage.RecordingLibrary
+import com.chippwalters.r1cord.storage.RenameResult
+import com.chippwalters.r1cord.storage.validateTitle
 import com.chippwalters.r1cord.sync.OffloadSettings
 import com.chippwalters.r1cord.sync.SendResult
 import com.chippwalters.r1cord.sync.deviceBadge
@@ -38,10 +42,12 @@ import kotlinx.coroutines.withContext
 class R1cordViewModel(application: Application) : AndroidViewModel(application) {
     private val graph = application as R1cordApplication
     private val audio = application.getSystemService(AudioManager::class.java)
+    // Pairing can change outside this ViewModel (USB provisioning through SetupProvider).
+    private val pairing = OffloadSettings.pairing(application)
     private val mutableState = MutableStateFlow(
         AppUiState(
-            paired = OffloadSettings.isPaired(application),
-            serverName = OffloadSettings.serverName(application),
+            paired = pairing.value.paired,
+            serverName = pairing.value.serverName,
         )
     )
     val state = mutableState.asStateFlow()
@@ -52,6 +58,9 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
 
     init {
         viewModelScope.launch { graph.library.items.collect { items -> mutableState.update { it.copy(recordings = items) } } }
+        viewModelScope.launch {
+            pairing.collect { snapshot -> mutableState.update { it.copy(paired = snapshot.paired, serverName = snapshot.serverName) } }
+        }
         viewModelScope.launch {
             graph.playback.state.collect { player ->
                 mutableState.update { previous ->
@@ -80,6 +89,9 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                         detailReturn = Screen.HOME
                         next = next.copy(screen = Screen.DETAIL, selectedId = capture.lastCompletedId)
                     }
+                    // A start that fails, or a session that ends without a saved file, leaves
+                    // the recorder IDLE; the recording screen has no usable control then.
+                    if (capture.status == CaptureStatus.IDLE && next.screen == Screen.RECORDING) next = next.copy(screen = Screen.HOME)
                     if (capture.error != null && capture.error != previous.capture.error) next = next.copy(message = capture.error)
                     next
                 }
@@ -210,12 +222,68 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
 
     fun closeSendSheet() { mutableState.update { it.copy(sendSheetFor = null) } }
 
-    fun send(id: String, title: String, reviews: Collection<String>, publish: Boolean) {
+    /** Opens the Rename dialog. The Send panel, if open, stays open underneath it. */
+    fun openRename(id: String) {
+        val current = state.value
+        if (current.isCapturing && current.capture.recordingId == id) { showError("Stop recording before renaming it."); return }
+        if (current.recordings.none { it.id == id }) { showError("Recording no longer exists."); return }
+        mutableState.update { it.copy(rename = RenameUiState(id)) }
+    }
+
+    fun closeRename() { mutableState.update { it.copy(rename = null) } }
+
+    /**
+     * Saves [title] as the recording's durable title (Room, then metadata.json). Validation
+     * and storage failures keep the dialog open with the error; a saved title whose metadata
+     * rewrite failed closes it with a message, since the next send repairs the metadata.
+     */
+    fun renameRecording(id: String, title: String) {
+        val current = state.value
+        if (current.rename?.busy == true) return
+        if (current.isCapturing && current.capture.recordingId == id) { renameFailed(id, "Stop recording before renaming it."); return }
+        val clean = try { validateTitle(title) } catch (e: IllegalArgumentException) {
+            renameFailed(id, e.message ?: "Enter a valid title.")
+            return
+        }
+        mutableState.update { it.copy(rename = RenameUiState(id, busy = true)) }
+        viewModelScope.launch {
+            val result = try {
+                withContext(Dispatchers.IO) { graph.library.renameRecording(id, clean) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                renameFailed(id, e.message ?: "Could not rename recording.")
+                return@launch
+            }
+            mutableState.update { previous ->
+                val rename = previous.rename?.takeIf { it.recordingId != id }
+                when (result) {
+                    RenameResult.Saved -> previous.copy(rename = rename)
+                    is RenameResult.SavedMetadataFailed -> previous.copy(
+                        rename = rename,
+                        message = "Title saved; metadata update failed. It will be repaired before the next send.",
+                    )
+                }
+            }
+        }
+    }
+
+    /** Shows [message] in the open Rename dialog for [id], or as a message if it was closed. */
+    private fun renameFailed(id: String, message: String) {
+        mutableState.update {
+            if (it.rename?.recordingId == id) it.copy(rename = RenameUiState(id, busy = false, error = message))
+            else it.copy(message = message)
+        }
+    }
+
+    /** Sends a recording under its durable title (see UploadCoordinator.send). */
+    fun send(id: String, reviews: Collection<String>, publish: Boolean) {
         if (state.value.isCapturing) { showError("Stop recording before sending."); return }
         if (state.value.upload != null) return
+        if (MaintenanceGate.snapshot().maintenance) { showError(RecordingLibrary.MAINTENANCE_MESSAGE); return }
         closeSendSheet()
         startUpload {
-            val result = graph.uploadCoordinator.send(id, title, reviews, publish) { progress ->
+            val result = graph.uploadCoordinator.send(id, reviews, publish) { progress ->
                 mutableState.update {
                     it.copy(
                         upload = UploadUiState(
@@ -237,6 +305,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
     fun sendAll() {
         if (state.value.isCapturing) { showError("Stop recording before sending."); return }
         if (state.value.upload != null) return
+        if (MaintenanceGate.snapshot().maintenance) { showError(RecordingLibrary.MAINTENANCE_MESSAGE); return }
         if (!OffloadSettings.isPaired(getApplication())) {
             showError("Pair with the desktop server in Settings first.")
             return
@@ -249,7 +318,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
         startUpload {
             var last: SendResult? = null
             items.forEachIndexed { index, item ->
-                val result = graph.uploadCoordinator.send(item.id, item.title, reviews, publish) { progress ->
+                val result = graph.uploadCoordinator.send(item.id, reviews, publish) { progress ->
                     val prefix = "${index + 1} of ${items.size}"
                     mutableState.update {
                         it.copy(
@@ -316,13 +385,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                 val app = getApplication<Application>()
                 OffloadSettings.setToken(app, result.token)
                 OffloadSettings.setServerName(app, result.serverName)
-                mutableState.update {
-                    it.copy(
-                        paired = true,
-                        serverName = result.serverName,
-                        pairing = PairingUiState(busy = false, serverName = result.serverName),
-                    )
-                }
+                mutableState.update { it.copy(pairing = PairingUiState(busy = false, serverName = result.serverName)) }
             } catch (e: Exception) {
                 mutableState.update { it.copy(pairing = PairingUiState(busy = false, error = e.message ?: "Pairing failed.")) }
             }
@@ -333,7 +396,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
         val app = getApplication<Application>()
         OffloadSettings.clearToken(app)
         OffloadSettings.setServerName(app, "")
-        mutableState.update { it.copy(paired = false, serverName = "", pairing = null) }
+        mutableState.update { it.copy(pairing = null) }
     }
 
     /** Shows a published page in the in-app viewer; the device's browser is not used. */
@@ -346,11 +409,12 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
         mutableState.update { it.copy(screen = Screen.VIEWER, viewerUrl = url, sendResult = null) }
     }
 
+    /** Uploads hold the maintenance gate for their whole run, so updates and shutdown wait for them. */
     private fun startUpload(block: suspend () -> Unit) {
         uploadJob?.cancel()
         uploadJob = viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) { block() }
+                withContext(Dispatchers.IO) { withUploadGate { block() } }
             } catch (_: CancellationException) {
                 // Job stays on the row so the next Send resumes.
             } catch (e: Exception) {
@@ -401,5 +465,19 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
     companion object {
         private const val OFFLOAD_CHANNEL = "offload"
         private const val OFFLOAD_NOTIFICATION_BASE = 2000
+    }
+}
+
+/**
+ * Runs [block] as upload work under the maintenance gate: refused with a readable
+ * IllegalStateException while maintenance is active, and always released afterwards,
+ * including on failure and cancellation.
+ */
+internal suspend fun <T> withUploadGate(block: suspend () -> T): T {
+    check(MaintenanceGate.tryBegin(MaintenanceGate.Work.UPLOAD)) { RecordingLibrary.MAINTENANCE_MESSAGE }
+    try {
+        return block()
+    } finally {
+        MaintenanceGate.end(MaintenanceGate.Work.UPLOAD)
     }
 }

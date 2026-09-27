@@ -1,21 +1,20 @@
 package com.chippwalters.r1cord.ui
 
-import android.content.ContentResolver
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
-import android.media.ExifInterface
-import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -23,6 +22,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudUpload
 import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Home
@@ -67,6 +69,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,9 +81,12 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import com.chippwalters.r1cord.R
@@ -88,6 +95,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -101,6 +112,7 @@ import com.chippwalters.r1cord.model.REVIEW_KINDS
 import com.chippwalters.r1cord.model.RecordingItem
 import com.chippwalters.r1cord.model.Screen
 import com.chippwalters.r1cord.model.SendResultUi
+import com.chippwalters.r1cord.model.RenameUiState
 import com.chippwalters.r1cord.model.UploadUiState
 import com.chippwalters.r1cord.sync.OffloadSettings
 import com.chippwalters.r1cord.sync.deviceBadge
@@ -147,6 +159,11 @@ fun R1cordUi(model: R1cordViewModel, onSettings: () -> Unit) {
                 val item = state.recordings.firstOrNull { it.id == id }
                 if (item == null) model.closeSendSheet()
                 else SendSheet(item, model)
+            }
+            state.rename?.let { rename ->
+                val item = state.recordings.firstOrNull { it.id == rename.recordingId }
+                if (item == null) model.closeRename()
+                else RenameDialog(rename, item, model)
             }
             state.upload?.let { upload -> UploadProgressDialog(upload, model::cancelUpload) }
             state.sendResult?.let { result -> SendResultDialog(result, model) }
@@ -231,12 +248,11 @@ private fun RecordingScreen(state: AppUiState, model: R1cordViewModel) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             ElapsedTimer(capture.elapsedMs)
-            Text(
-                if (capture.status == CaptureStatus.AUTO_LISTENING) "SILENCE SKIPPED"
-                else item?.title?.uppercase(Locale.getDefault()) ?: "Preparing recording…",
-                color = if (capture.status == CaptureStatus.AUTO_LISTENING) Teal else Muted,
-                fontFamily = RecorderLabelFace, fontSize = 18.sp, letterSpacing = 0.5.sp,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            RecordingTitleRow(item, TitleRowStyle.LIVE)
+            if (capture.status == CaptureStatus.AUTO_LISTENING) {
+                Text("SILENCE SKIPPED", color = Teal, fontFamily = RecorderLabelFace, fontSize = 18.sp,
+                    letterSpacing = 0.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         MonoMeter(if (capture.status == CaptureStatus.RECORDING || capture.status == CaptureStatus.AUTO_LISTENING) capture.level else 0f)
         StorageCard(state.storageSeconds, compact = true)
@@ -279,9 +295,7 @@ private fun LibraryScreen(state: AppUiState, model: R1cordViewModel) {
                             .fillMaxWidth().clickable { model.openRecording(recording.id) },
                     ) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Text(recording.title.uppercase(Locale.getDefault()), fontFamily = RecorderLabelFace,
-                                fontSize = 20.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            RecordingTitleRow(recording, TitleRowStyle.LIBRARY, Modifier.fillMaxWidth())
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically) {
                                 Text("${timerLabel(recording.durationMs)} · ${recording.photos.size} ${if (recording.photos.size == 1) "photo" else "photos"}",
@@ -330,8 +344,12 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Header("RECORDING DETAIL", state.batteryPercent, state.isCharging)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(item.title.uppercase(Locale.getDefault()), fontFamily = RecorderDisplayFace,
-                fontSize = 30.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp)
+            RecordingTitleRow(item, TitleRowStyle.DETAIL, Modifier.fillMaxWidth()) {
+                IconButton(onClick = { model.openRename(item.id) }, enabled = !state.isCapturing,
+                    modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.Edit, contentDescription = "Rename recording")
+                }
+            }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(dateLabel(item.createdAt), color = Muted, fontFamily = RecorderLabelFace, fontSize = 17.sp)
                 SavedStatus(item.status)
@@ -419,7 +437,11 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
             title = "Delete this recording?",
             message = "Deletes this recording and all ${item.photos.size} attached photos from this device. Manual USB copies cannot be verified. Make sure you have copied anything you need. Files already copied to a computer are not deleted.",
             onCancel = { confirmDelete = false },
-            onConfirm = { confirmDelete = false; model.deleteRecording(item.id) },
+            onConfirm = {
+                confirmDelete = false
+                item.photos.forEach { PhotoThumbnails.invalidate(it.uri) }
+                model.deleteRecording(item.id)
+            },
             description = "Confirm delete recording",
         )
     }
@@ -442,6 +464,7 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
             onConfirm = {
                 deletePhotoId = null
                 galleryPhotoId = null
+                item.photos.firstOrNull { it.id == id }?.let { PhotoThumbnails.invalidate(it.uri) }
                 model.deletePhoto(item.id, id)
             },
             description = "Confirm delete photo",
@@ -612,41 +635,171 @@ internal fun JobBadge(status: String) {
 @Composable
 private fun SendSheet(item: RecordingItem, model: R1cordViewModel) {
     val context = LocalContext.current
-    var title by remember(item.id) { mutableStateOf(item.title) }
-    var reviews by remember(item.id) { mutableStateOf(OffloadSettings.defaultReviews(context)) }
-    var publish by remember(item.id) { mutableStateOf(OffloadSettings.defaultPublish(context)) }
+    // Saveable and keyed by recording: choices survive the Rename dialog and configuration changes.
+    var reviews by rememberSaveable(item.id, stateSaver = ReviewListSaver) {
+        mutableStateOf(OffloadSettings.defaultReviews(context))
+    }
+    var publish by rememberSaveable(item.id) { mutableStateOf(OffloadSettings.defaultPublish(context)) }
+    val density = LocalDensity.current
+    val insets = WindowInsets.safeDrawing
+    val insetHeight = with(density) { (insets.getTop(density) + insets.getBottom(density)).toDp() }
+    val maxHeight = boundedPanelHeight(LocalConfiguration.current.screenHeightDp.dp, insetHeight)
+    Dialog(onDismissRequest = model::closeSendSheet, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        // Surface clips to its shape and swallows touches, so nothing paints or reacts outside the panel.
+        Surface(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).heightIn(max = maxHeight),
+            shape = Shape, color = Panel,
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Send recording", fontFamily = RecorderDisplayFace, fontSize = 22.sp,
+                    fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Column(
+                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    RecordingTitleRow(item, TitleRowStyle.SEND, Modifier.fillMaxWidth()) {
+                        TextButton(onClick = { model.openRename(item.id) },
+                            modifier = control("Rename recording before sending")) { Text("RENAME") }
+                    }
+                    Text("AI REVIEWS", color = Muted, fontFamily = RecorderLabelFace, fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp, maxLines = 1)
+                    ReviewChoices(reviews) { reviews = it }
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Publish", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                        Switch(checked = publish, onCheckedChange = { publish = it }, modifier = control("Publish"))
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = model::closeSendSheet, modifier = control("Cancel send").weight(1f)) {
+                        Text("CANCEL", maxLines = 1)
+                    }
+                    Button(
+                        onClick = { model.send(item.id, reviews, publish) },
+                        modifier = control("Send recording").weight(1f),
+                        colors = ButtonDefaults.buttonColors(containerColor = Orange, contentColor = Ink),
+                    ) { Text("SEND", maxLines = 1) }
+                }
+            }
+        }
+    }
+}
+
+private val ReviewListSaver = listSaver<List<String>, String>(save = { it }, restore = { it })
+
+/** Panel height cap: the window minus system bars/IME and a margin, never below a usable minimum. */
+private fun boundedPanelHeight(windowHeight: Dp, insetHeight: Dp, margin: Dp = 32.dp): Dp =
+    maxOf(windowHeight - insetHeight - margin, minOf(160.dp, windowHeight))
+
+/** The three AI reviews as one row of compact toggles, in canonical order; selected ones are orange. */
+@Composable
+private fun ReviewChoices(selected: List<String>, onChange: (List<String>) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        REVIEW_KINDS.forEach { kind ->
+            val label = when (kind) {
+                "summary" -> "Summary"
+                "outline" -> "Outline"
+                else -> "Organized"
+            }
+            val on = kind in selected
+            Surface(
+                checked = on,
+                onCheckedChange = { value -> onChange(REVIEW_KINDS.filter { it == kind && value || it != kind && it in selected }) },
+                modifier = control(label).weight(1f),
+                shape = RoundedCornerShape(12.dp),
+                color = if (on) Orange else Recessed,
+                contentColor = if (on) Ink else White,
+                border = BorderStroke(1.dp, if (on) Orange else Border),
+            ) {
+                Box(Modifier.padding(horizontal = 4.dp, vertical = 8.dp), contentAlignment = Alignment.Center) {
+                    Text(label, fontFamily = RecorderBodyFace, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                }
+            }
+        }
+    }
+}
+
+private const val MAX_TITLE_LENGTH = 120
+
+@Composable
+private fun RenameDialog(rename: RenameUiState, item: RecordingItem, model: R1cordViewModel) {
+    var text by rememberSaveable(rename.recordingId, stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(item.title, TextRange(item.title.length)))
+    }
+    val canSave = !rename.busy && text.text.isNotBlank()
+    val save = { if (canSave) model.renameRecording(rename.recordingId, text.text) }
     AlertDialog(
-        onDismissRequest = model::closeSendSheet,
-        title = { Text("Send recording") },
+        onDismissRequest = { if (!rename.busy) model.closeRename() },
+        title = { Text("Rename recording", maxLines = 1, overflow = TextOverflow.Ellipsis) },
         text = {
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = title,
-                    onValueChange = { if (it.length <= 120) title = it },
+                    value = text,
+                    onValueChange = { if (it.text.length <= MAX_TITLE_LENGTH) text = it },
                     label = { Text("Title") },
                     singleLine = true,
+                    enabled = !rename.busy,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done,
+                    ),
+                    keyboardActions = KeyboardActions(onDone = { save() }),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Text("AI reviews", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                ReviewToggles(reviews) { reviews = it }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Publish", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    Switch(checked = publish, onCheckedChange = { publish = it })
+                rename.error?.let { error ->
+                    Text(error, color = Orange, fontSize = 16.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = { model.send(item.id, title, reviews, publish) },
-                enabled = title.trim().isNotEmpty(),
-                modifier = control("Send recording"),
-            ) { Text("SEND") }
+            TextButton(onClick = save, enabled = canSave, modifier = control("Save title")) {
+                Text(if (rename.busy) "SAVING…" else "SAVE")
+            }
         },
         dismissButton = {
-            TextButton(onClick = model::closeSendSheet, modifier = control("Cancel send")) { Text("CANCEL") }
+            TextButton(onClick = model::closeRename, enabled = !rename.busy, modifier = control("Cancel rename")) {
+                Text("CANCEL")
+            }
         },
     )
+}
+
+/** Where a [RecordingTitleRow] appears; sets the thumbnail size and title typography. */
+private enum class TitleRowStyle(val thumb: Dp) { LIBRARY(48.dp), LIVE(40.dp), DETAIL(60.dp), SEND(48.dp) }
+
+/**
+ * First-photo thumbnail beside a recording title. With no photo the thumbnail and its gap vanish.
+ * A null [item] (live capture still preparing) shows a placeholder title.
+ */
+@Composable
+private fun RecordingTitleRow(
+    item: RecordingItem?,
+    style: TitleRowStyle,
+    modifier: Modifier = Modifier,
+    trailing: @Composable RowScope.() -> Unit = {},
+) {
+    val title = when {
+        item == null -> "Preparing recording…"
+        style == TitleRowStyle.SEND -> item.title
+        else -> item.title.uppercase(Locale.getDefault())
+    }
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        PhotoThumb(item?.photos?.firstOrNull(), style.thumb)
+        // The live row wraps its content so the screen can centre it; the others fill the width.
+        val textModifier = Modifier.weight(1f, fill = style != TitleRowStyle.LIVE)
+        when (style) {
+            TitleRowStyle.LIBRARY -> Text(title, fontFamily = RecorderLabelFace, fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = textModifier)
+            TitleRowStyle.LIVE -> Text(title, color = Muted, fontFamily = RecorderLabelFace, fontSize = 18.sp,
+                letterSpacing = 0.5.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = textModifier)
+            TitleRowStyle.DETAIL -> Text(title, fontFamily = RecorderDisplayFace, fontSize = 30.sp,
+                fontWeight = FontWeight.Bold, letterSpacing = 0.5.sp, maxLines = 2,
+                overflow = TextOverflow.Ellipsis, modifier = textModifier)
+            TitleRowStyle.SEND -> Text(title, fontFamily = RecorderBodyFace, fontSize = 20.sp,
+                fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = textModifier)
+        }
+        trailing()
+    }
 }
 
 /**
@@ -833,36 +986,6 @@ private fun LocalPhoto(photo: PhotoItem, target: Int, modifier: Modifier, scale:
             Text(if (loaded == null) "Loading…" else "Photo unavailable", color = Muted,
                 fontSize = 16.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
         }
-    }
-}
-
-private fun loadPhoto(resolver: ContentResolver, value: String, target: Int): Bitmap {
-    val uri = Uri.parse(value)
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    val boundsStream = resolver.openInputStream(uri) ?: error("Photo cannot be opened")
-    boundsStream.use { BitmapFactory.decodeStream(it, null, bounds) }
-    require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Invalid photo" }
-    var sample = 1
-    while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= target) sample *= 2
-    val options = BitmapFactory.Options().apply { inSampleSize = sample }
-    val bitmap = resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
-        ?: error("Photo cannot be decoded")
-    val orientation = resolver.openInputStream(uri)?.use {
-        ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-    } ?: ExifInterface.ORIENTATION_NORMAL
-    val matrix = Matrix()
-    when (orientation) {
-        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f)
-        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f)
-        ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f)
-        ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }
-        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
-        ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.setRotate(270f); matrix.postScale(-1f, 1f) }
-        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(270f)
-    }
-    if (matrix.isIdentity) return bitmap
-    return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also {
-        if (it !== bitmap) bitmap.recycle()
     }
 }
 

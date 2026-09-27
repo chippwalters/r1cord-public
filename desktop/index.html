@@ -10,14 +10,73 @@
         margin: 0;
         height: 100%;
         background: #0E1013;
-        color: #F3F4F5;
-        font-family: system-ui, sans-serif;
+        color: #F5F5F5;
+        font-family: "Segoe UI", system-ui, sans-serif;
       }
       body {
         display: flex;
         align-items: center;
         justify-content: center;
       }
+      /* Start screen, or Preferences when the page is opened as index.html#prefs. */
+      #prefs { display: none; }
+      #prefs:target { display: block; }
+      body:has(#prefs:target) #starting { display: none; }
+      .splash {
+        width: min(460px, 92vw);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-bottom: 36px;
+      }
+      .brand svg { width: 52px; height: 49px; }
+      .wordmark {
+        font-size: 40px;
+        font-weight: 700;
+        letter-spacing: .06em;
+        line-height: 1;
+      }
+      .spinner {
+        width: 28px;
+        height: 28px;
+        border: 3px solid #2B3037;
+        border-top-color: #FE4023;
+        border-radius: 50%;
+        animation: spin .9s linear infinite;
+        margin-bottom: 18px;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .status {
+        margin: 0;
+        color: #F5F5F5;
+        font-size: 17px;
+        font-weight: 600;
+      }
+      .detail {
+        margin: 16px 0 0;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        background: #1B1F25;
+        border: 1px solid rgba(254, 64, 35, .45);
+        border-radius: 6px;
+        color: #C2C7CE;
+        font: 13px/1.45 "Cascadia Mono", Consolas, monospace;
+        text-align: left;
+        overflow-wrap: anywhere;
+      }
+      .splash .note {
+        margin: 12px 0 0;
+      }
+      .splash.failed .spinner { display: none; }
+      .splash.failed .status { color: #FE4023; }
+      .splash button { margin-top: 20px; }
       .card {
         width: min(420px, 92vw);
         background: #1B1F25;
@@ -41,11 +100,16 @@
       }
       button {
         background: #FE4023;
-        color: #F3F4F5;
+        color: #F5F5F5;
         border: 0;
         border-radius: 4px;
         padding: 8px 14px;
+        font: inherit;
         cursor: pointer;
+      }
+      button:disabled {
+        opacity: .6;
+        cursor: default;
       }
       .note {
         color: #9aa0a6;
@@ -54,11 +118,24 @@
     </style>
   </head>
   <body>
-    <div id="starting" class="card">
-      <h1>R1CORD Desktop</h1>
-      <p id="status">Starting the server…</p>
-    </div>
-    <div id="prefs" class="card" hidden>
+    <main id="starting" class="splash" aria-live="polite">
+      <div class="brand">
+        <svg viewBox="248.75 269.0 757.25 708.5" aria-hidden="true">
+          <rect x="248.75" y="626.5" width="101.5" height="266.5" rx="50.75" fill="#F3F4F5"/>
+          <rect x="392.75" y="489.5" width="116.5" height="478.5" rx="58.25" fill="#3FBBA9"/>
+          <rect x="744.75" y="489.5" width="116.5" height="478.5" rx="58.25" fill="#3FBBA9"/>
+          <rect x="904.25" y="626.5" width="101.5" height="266.5" rx="50.75" fill="#F3F4F5"/>
+          <path fill="#FE4023" d="M494.05,383.40 A29.15,29.15 0 0,1 507.96,358.55 L644.75,274.73 A39.24,39.24 0 0,1 704.49,308.18 L704.49,933.10 A44.68,44.68 0 0,1 659.81,977.78 L622.37,977.78 A42.69,42.69 0 0,1 579.67,935.09 L579.67,444.32 A21.68,21.68 0 0,0 546.07,426.22 L536.22,432.71 A27.21,27.21 0 0,1 494.05,409.99 Z"/>
+        </svg>
+        <span class="wordmark">R1CORD</span>
+      </div>
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="status" class="status" role="status">Starting R1CORD…</p>
+      <p id="detail" class="detail" hidden></p>
+      <p id="note" class="note" hidden></p>
+      <button id="retry" type="button" hidden>Retry</button>
+    </main>
+    <div id="prefs" class="card">
       <h1>Desktop preferences</h1>
       <p>When should R1CORD Desktop start?</p>
       <form id="prefs-form">

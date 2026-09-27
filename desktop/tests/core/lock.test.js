@@ -35,7 +35,20 @@ function tmpDir() {
   return dir;
 }
 
-function writeToml(root, listenPort) {
+// A port the OS reports free on 127.0.0.1 that is not in `avoid`.
+async function freePort(avoid = []) {
+  for (;;) {
+    const probe = net.createServer();
+    await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+    const port = probe.address().port;
+    await new Promise((resolve) => probe.close(resolve));
+    if (!avoid.includes(port)) return port;
+  }
+}
+
+// api_port is always set explicitly so a spawned core never binds the default 8766, which a
+// running R1CORD Desktop on this machine may hold.
+function writeToml(root, listenPort, apiPort) {
   const datastore = path.join(root, 'ds');
   const config = withUpdates(defaultConfig(), {
     datastore,
@@ -44,6 +57,7 @@ function writeToml(root, listenPort) {
     admin_password: 'test-admin-pass1',
     listen_host: '127.0.0.1',
     listen_port: listenPort,
+    api_port: apiPort,
   });
   const configPath = path.join(root, 'config.toml');
   saveConfig(config, configPath);
@@ -185,7 +199,7 @@ describe('datastore lock', () => {
 
   it('releases on close so another core can open the datastore', async () => {
     const root = tmpDir();
-    const { config } = writeToml(root, 8811);
+    const { config } = writeToml(root, 8811, await freePort([8811]));
     const first = createApp(config, { noWorker: true, noUsb: true });
     await first.ready();
     expect(fs.existsSync(path.join(config.datastore, LOCK_NAME))).toBe(true);
@@ -213,7 +227,7 @@ describe('listen address in use', () => {
     await new Promise((resolve) => blocker.listen(0, '127.0.0.1', resolve));
     cleanup.push(() => new Promise((resolve) => blocker.close(resolve)));
     const port = blocker.address().port;
-    const { configPath } = writeToml(root, port);
+    const { configPath } = writeToml(root, port, await freePort([port]));
     const child = spawnCore(configPath, port);
     const result = await waitExit(child, 15000);
     expect(result.code).not.toBe(0);
@@ -224,11 +238,9 @@ describe('listen address in use', () => {
 describe('spawned second core', () => {
   it('is refused with the lock message and a non-zero exit', async () => {
     const root = tmpDir();
-    const probe = net.createServer();
-    await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
-    const port = probe.address().port;
-    await new Promise((resolve) => probe.close(resolve));
-    const { configPath, datastore } = writeToml(root, port);
+    const port = await freePort();
+    const apiPort = await freePort([port, port + 1]);
+    const { configPath, datastore } = writeToml(root, port, apiPort);
     const first = spawnCore(configPath, port);
     await waitStatus(port);
     expect(readLock(lockPath(datastore)).pid).toBe(first.pid);

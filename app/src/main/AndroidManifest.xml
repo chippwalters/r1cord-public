@@ -9,6 +9,12 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <queries>
+        <!-- R1CORD controls helper (signer checked before binding) and Tailscale. -->
+        <package android:name="com.chippwalters.r1cord.controls" />
+        <package android:name="com.tailscale.ipn" />
+    </queries>
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
     <application android:name=".R1cordApplication" android:label="R1CORD"
@@ -35,5 +41,8 @@
             <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/power_menu_service" />
         </service>
+        <!-- USB setup from the desktop via `adb shell content`; SetupProvider also requires a root/shell uid. -->
+        <provider android:name=".sync.SetupProvider" android:authorities="com.chippwalters.r1cord.setup"
+            android:exported="true" android:permission="android.permission.DUMP" />
     </application>
 </manifest>

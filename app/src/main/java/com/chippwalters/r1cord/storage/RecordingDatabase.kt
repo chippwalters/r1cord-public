@@ -52,12 +52,14 @@ internal data class PhotoRow(
 @Dao
 internal interface RecordingDao {
     @Query("SELECT * FROM recordings ORDER BY createdAt DESC") fun observeRecordings(): Flow<List<RecordingRow>>
-    @Query("SELECT * FROM photos ORDER BY createdAt") fun observePhotos(): Flow<List<PhotoRow>>
+    // Photos are always oldest first with a stable tie-break: the first SAVED photo is the recording's thumbnail.
+    @Query("SELECT * FROM photos ORDER BY createdAt, id") fun observePhotos(): Flow<List<PhotoRow>>
     @Query("SELECT * FROM recordings") suspend fun recordings(): List<RecordingRow>
     @Query("SELECT * FROM recordings WHERE id = :id") suspend fun recording(id: String): RecordingRow?
-    @Query("SELECT * FROM photos WHERE recordingId = :id ORDER BY createdAt") suspend fun photos(id: String): List<PhotoRow>
+    @Query("SELECT * FROM photos WHERE recordingId = :id ORDER BY createdAt, id") suspend fun photos(id: String): List<PhotoRow>
     @Insert suspend fun insert(row: RecordingRow)
     @Insert suspend fun insertPhoto(row: PhotoRow)
+    @Query("UPDATE recordings SET title = :title WHERE id = :id") suspend fun title(id: String, title: String): Int
     @Query("UPDATE recordings SET audioUri = :uri WHERE id = :id") suspend fun audio(id: String, uri: String)
     @Query("UPDATE recordings SET metadataUri = :uri WHERE id = :id") suspend fun metadata(id: String, uri: String)
     @Query("UPDATE recordings SET status = :status, error = :error WHERE id = :id") suspend fun status(id: String, status: String, error: String? = null)

@@ -739,7 +739,7 @@ describe('JobStore', () => {
     const ids = store.tokens().map((t) => t.id);
     expect(ids).toEqual([...ids].sort((a, b) => b - a)); // newest first
 
-    store.revokeToken(entry.id);
+    store.revokeTokenById(entry.id);
     expect(store.tokenValid(raw)).toBe(false);
     expect(store.tokens()[0].revoked).toBe(false); // only the targeted token
   });
@@ -750,6 +750,48 @@ describe('JobStore', () => {
     const code = store.createPairCode(); // expires pair_code_ttl_s from now (600s default)
     frozen = '2999-01-01T00:00:00Z';
     expect(store.redeemPairCode(code, 'phone')).toBeNull();
+  });
+
+  it('issues a USB device token without a pair code, stored hashed, revocable by id', () => {
+    const store = openStore(cfg(tmpPath()));
+    const raw = store.issueDeviceToken('usb:SERIAL-A');
+    expect(raw).toMatch(/^[0-9a-f]{64}$/);
+    const other = store.issueDeviceToken('usb:SERIAL-B');
+    const newer = store.issueDeviceToken('usb:SERIAL-A');
+    expect(new Set([raw, other, newer]).size).toBe(3);
+    expect(store.tokenValid(raw)).toBe(true);
+
+    const rows = store.tokensByLabel('usb:SERIAL-A');
+    expect(rows.map((row) => row.sha256)).toEqual([hashToken(newer), hashToken(raw)]); // newest first, hashes only
+    expect(rows.every((row) => row.label === 'usb:SERIAL-A' && row.revoked === false)).toBe(true);
+    expect(store.tokensByLabel('usb:SERIAL')).toEqual([]); // exact label, not a prefix
+
+    store.revokeTokenById(rows[1].id);
+    expect(store.tokenValid(raw)).toBe(false);
+    expect(store.tokenValid(newer)).toBe(true);
+    expect(store.tokenValid(other)).toBe(true);
+    expect(store.tokensByLabel('usb:SERIAL-A').map((row) => row.revoked)).toEqual([false, true]);
+  });
+
+  it('locks pairing after five wrong codes within ten minutes until a new code', () => {
+    let now = Date.parse('2026-09-26T10:00:00Z');
+    const store = openStore(cfg(tmpPath()), { clock: () => new Date(now).toISOString().replace(/\.\d{3}Z$/, 'Z') });
+    store.createPairCode();
+    // Four failures, then the window slides past the first two: still unlocked after a fifth.
+    for (let i = 0; i < 4; i += 1) {
+      expect(store.recordPairFailure()).toBe(false);
+      now += 2 * 60 * 1000;
+    }
+    now += 3 * 60 * 1000; // the first failure is now 11 min old, the second 9 min
+    expect(store.recordPairFailure()).toBe(false);
+    expect(store.pairingLocked()).toBe(false);
+    expect(store.recordPairFailure()).toBe(true); // five inside ten minutes
+    expect(store.pairingLocked()).toBe(true);
+    now += 60 * 60 * 1000;
+    expect(store.pairingLocked()).toBe(true); // time alone does not unlock
+    store.createPairCode();
+    expect(store.pairingLocked()).toBe(false);
+    expect(store.recordPairFailure()).toBe(false); // the count restarted
   });
 
   // --- logs ---------------------------------------------------------------------------

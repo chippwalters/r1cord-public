@@ -7,7 +7,7 @@ import path from 'node:path';
 
 const require = createRequire(import.meta.url);
 const { defaultConfig, withUpdates } = require('../../src/core/config');
-const { createApp } = require('../../src/core/app');
+const { createApp, createApiApp } = require('../../src/core/app');
 const {
   checkBrowserRequest,
   hostName,
@@ -308,5 +308,31 @@ describe('admin over HTTP', () => {
       headers: { authorization: basic },
     });
     expect(ok.statusCode).toBe(200);
+  });
+});
+
+describe('API-only listener over a real loopback socket (the USB reverse / Serve target)', () => {
+  it('never reaches the admin, and accepts a USB-issued token until it is revoked', async () => {
+    const app = await openApp(cfg(tmpPath()));
+    const api = createApiApp(app.state);
+    cleanup.push(() => api.close());
+    await api.listen({ host: '127.0.0.1', port: 0 });
+    const base = `http://127.0.0.1:${api.server.address().port}`;
+
+    for (const url of ['/admin', '/admin/api/status', '/admin/config', '/static/admin.css']) {
+      const res = await fetch(`${base}${url}`);
+      expect(res.status, url).toBe(404);
+    }
+    const shutdown = await fetch(`${base}/admin/shutdown`, { method: 'POST' });
+    expect(shutdown.status).toBe(404);
+
+    const token = app.state.store.issueDeviceToken('usb:TESTSERIAL');
+    const headers = { authorization: `Bearer ${token}` };
+    expect((await fetch(`${base}/v1/recordings`)).status).toBe(401);
+    expect((await fetch(`${base}/v1/recordings`, { headers })).status).toBe(200);
+
+    const [issued] = app.state.store.tokensByLabel('usb:TESTSERIAL');
+    app.state.store.revokeTokenById(issued.id);
+    expect((await fetch(`${base}/v1/recordings`, { headers })).status).toBe(401);
   });
 });

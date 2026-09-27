@@ -10,15 +10,21 @@ const { defaultConfigPath, defaultDatastore, defaultWebdavFolder, pathString } =
 
 // Dataclass field order; saveConfig() writes the TOML keys in this order.
 const FIELD_ORDER = [
-  'server_name', 'listen_host', 'listen_port', 'datastore', 'webdav_folder', 'public_url_base',
+  'server_name', 'listen_host', 'listen_port', 'api_port', 'datastore', 'webdav_folder', 'public_url_base',
   'theme', 'default_writer', 'default_reviews', 'writer_timeout_s', 'claude_cmd', 'codex_cmd',
   'grok_cmd', 'asr_model', 'asr_device', 'asr_quant', 'asr_language', 'admin_password', 'admin_remote',
   'pair_code_ttl_s', 'usb_enabled', 'adb_cmd', 'usb_poll_s', 'usb_auto_action', 'usb_device_root',
   'run_mode', 'idle_exit_min', 'email_enabled', 'email_to', 'gws_cmd',
+  'update_check', 'update_check_asked', 'r1_auto_update', 'update_manifest_url', 'tailscale_serve',
 ];
 const PATH_FIELDS = new Set(['datastore', 'webdav_folder']);
-const INT_FIELDS = new Set(['listen_port', 'writer_timeout_s', 'pair_code_ttl_s', 'usb_poll_s', 'idle_exit_min']);
-const BOOL_FIELDS = new Set(['usb_enabled', 'email_enabled', 'admin_remote']);
+const INT_FIELDS = new Set(['listen_port', 'api_port', 'writer_timeout_s', 'pair_code_ttl_s', 'usb_poll_s', 'idle_exit_min']);
+const BOOL_FIELDS = new Set([
+  'usb_enabled', 'email_enabled', 'admin_remote', 'update_check', 'update_check_asked', 'tailscale_serve',
+]);
+// r1_auto_update: never touch the R1, ask before installing an offered update, or install it unattended.
+const R1_AUTO_UPDATE_VALUES = ['off', 'ask', 'install'];
+const DEFAULT_UPDATE_MANIFEST_URL = 'https://www.widgetgadget.com/cw1/R1CORD/auto-update-files/manifest.json';
 const WRITERS = new Set(['claude_code', 'codex', 'grok_build', 'none']);
 // Same asr_device values Python 0.3.4 accepts, so a Settings save never writes a config.toml
 // the rollback server rejects. Desktop maps cuda to auto at runtime (Vulkan/CPU); asr_quant is
@@ -134,12 +140,26 @@ function toBool(value) {
   return Boolean(value);
 }
 
+const DEFAULT_API_PORT = 8766;
+
+// api_port for a config file that does not set it: 8766, or the next port up (wrapping within
+// 1..65535) that none of `listenPorts` uses, so a config written before the API listener existed
+// never clashes with the admin listener it already has.
+function defaultApiPort(...listenPorts) {
+  const taken = new Set(listenPorts.filter((port) => port != null).map(Number));
+  let port = DEFAULT_API_PORT;
+  while (taken.has(port)) port = (port % 65535) + 1;
+  return port;
+}
+
 // Options: { env = process.env, logger = console } (paths.js adds platform/home).
 function defaultConfig(options = {}) {
   return freeze({
     server_name: 'R1CORD',
     listen_host: '127.0.0.1',
     listen_port: 8765,
+    // API-only /v1 listener, always on 127.0.0.1: the USB reverse and Tailscale Serve target.
+    api_port: DEFAULT_API_PORT,
     datastore: defaultDatastore(options),
     webdav_folder: defaultWebdavFolder(options),
     public_url_base: '',
@@ -167,6 +187,11 @@ function defaultConfig(options = {}) {
     email_enabled: false,
     email_to: '',
     gws_cmd: 'gws',
+    update_check: false,
+    update_check_asked: false,
+    r1_auto_update: 'ask',
+    update_manifest_url: DEFAULT_UPDATE_MANIFEST_URL,
+    tailscale_serve: false,
   });
 }
 
@@ -184,6 +209,8 @@ function saveConfig(config, configPath = null, options = {}) {
 }
 
 // Load config from TOML. Create defaults and a random admin password on first run.
+// options.listenPort: the admin port the caller will listen on when it overrides listen_port
+// (index.js --port); a defaulted api_port avoids it as well as the file's listen_port.
 function loadConfig(configPath = null, options = {}) {
   const { logger = console } = options;
   const cfgPath = configPath || defaultConfigPath(options);
@@ -206,6 +233,7 @@ function withUpdates(config, updates = {}) {
     else updated[key] = value;
   }
   assertAsr(updated);
+  assertAppliance(updated);
   return freeze(updated);
 }
 
@@ -221,7 +249,13 @@ function bootstrap(cfgPath, options) {
   const datastore = samePath(cfgPath, defaultConfigPath(options))
     ? defaultDatastore(options)
     : path.join(path.dirname(cfgPath), 'data');
-  const config = freeze({ ...defaultConfig(options), datastore, admin_password: password });
+  const defaults = defaultConfig(options);
+  const config = freeze({
+    ...defaults,
+    api_port: defaultApiPort(defaults.listen_port, options.listenPort),
+    datastore,
+    admin_password: password,
+  });
   saveConfig(config, cfgPath, options);
   console.log(`r1cord-server first run. Config: ${cfgPath}  Data: ${datastore}`);
   return config;
@@ -249,6 +283,8 @@ function parseConfig(cfgPath, options, logger) {
     }
     config[key] = value;
   }
+  // Only an api_port the file sets can clash; an absent one resolves around the listen port(s).
+  if (!('api_port' in raw)) config.api_port = defaultApiPort(config.listen_port, options.listenPort);
   try {
     config.theme = themeId(config.theme);
   } catch (error) {
@@ -271,6 +307,7 @@ function parseConfig(cfgPath, options, logger) {
   if (config.usb_poll_s < 1) throw new ValueError('usb_poll_s must be >= 1');
   if (!RUN_MODES.includes(config.run_mode)) throw new ValueError(`invalid run_mode: ${config.run_mode}`);
   if (config.idle_exit_min < 1) throw new ValueError('idle_exit_min must be >= 1');
+  assertAppliance(config);
   return freeze(config);
 }
 
@@ -283,6 +320,27 @@ function assertAsr(config) {
   }
 }
 
+function assertPort(name, value) {
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new ValueError(`${name} must be between 1 and 65535`);
+  }
+}
+
+// The API-only listener must never share the admin listener's port: USB reverse and Tailscale Serve
+// point at api_port, and the admin must not be reachable through them.
+function assertAppliance(config) {
+  assertPort('api_port', config.api_port);
+  if (config.api_port === config.listen_port) {
+    throw new ValueError(`api_port must differ from listen_port (${config.listen_port})`);
+  }
+  if (!R1_AUTO_UPDATE_VALUES.includes(config.r1_auto_update)) {
+    throw new ValueError(`invalid r1_auto_update: ${config.r1_auto_update}`);
+  }
+  if (typeof config.update_manifest_url !== 'string') {
+    throw new ValueError('update_manifest_url must be a string');
+  }
+}
+
 module.exports = {
   REVIEW_KINDS,
   PAGE_KINDS,
@@ -292,7 +350,10 @@ module.exports = {
   RUN_MODES,
   ASR_DEVICE_VALUES,
   ASR_QUANT_VALUES,
+  R1_AUTO_UPDATE_VALUES,
+  DEFAULT_UPDATE_MANIFEST_URL,
   canonicalReviews,
+  defaultApiPort,
   defaultConfig,
   loadConfig,
   saveConfig,

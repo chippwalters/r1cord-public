@@ -27,6 +27,9 @@ const ACTIVE_STATUSES = Object.freeze([
   'published',
 ]);
 const TERMINAL_STATUSES = Object.freeze(['complete', 'error']);
+// POST /v1/pair locks after this many wrong codes inside the window, until a new code is created.
+const PAIR_FAILURE_LIMIT = 5;
+const PAIR_FAILURE_WINDOW_MS = 10 * 60 * 1000;
 const RETRY_WRITER_STATUSES = Object.freeze(['transcribed', 'written', 'published', 'complete', 'error']);
 const AUDIO_NAMES = Object.freeze(['audio.m4a', 'audio.wav']);
 const FILE_NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -282,6 +285,17 @@ function pyInt(value) {
 // A column read the way str(row[...]) does: NULL becomes 'None'.
 function str(value) {
   return value === null || value === undefined ? 'None' : String(value);
+}
+
+function tokenFromRow(row) {
+  return {
+    id: Number(row.id),
+    sha256: str(row.sha256),
+    label: String(row.label || ''),
+    createdAt: str(row.created_at),
+    lastUsedAt: row.last_used_at ? String(row.last_used_at) : null,
+    revoked: Boolean(Number(row.revoked)),
+  };
 }
 
 function pyNumber(value) {
@@ -568,6 +582,9 @@ class JobStore {
     this._now = clock;
     this._log = logger;
     this._statements = new Map();
+    // Wrong pairing codes (ms timestamps) inside the window; in memory, shared by every listener.
+    this._pairFailures = [];
+    this._pairLocked = false;
     const root = String(config.datastore);
     for (const name of ['inbox', 'work', 'outbox', 'logs']) fs.mkdirSync(path.join(root, name), { recursive: true });
     this._dbPath = path.join(root, 'index.sqlite');
@@ -634,6 +651,9 @@ class JobStore {
       const code = String(crypto.randomInt(1_000_000)).padStart(6, '0');
       try {
         this._run('INSERT INTO pair_codes (code, expires_at, used) VALUES (?, ?, 0)', code, expiresAt);
+        // A fresh code is the owner's deliberate action at the desktop: it lifts a brute-force lock.
+        this._pairFailures = [];
+        this._pairLocked = false;
         return code;
       } catch (error) {
         if (!isConstraintError(error)) throw error;
@@ -647,17 +667,46 @@ class JobStore {
     const now = this._now();
     const row = this._get('SELECT code, expires_at, used FROM pair_codes WHERE code = ?', code);
     if (!row || Number(row.used) !== 0 || str(row.expires_at) < now) return null;
-    const raw = crypto.randomBytes(32).toString('hex');
-    const digest = hashToken(raw);
+    let raw = null;
     this._transaction(() => {
       this._run('UPDATE pair_codes SET used = 1 WHERE code = ?', code);
-      this._run(
-        'INSERT INTO tokens (sha256, label, created_at, last_used_at, revoked) VALUES (?, ?, ?, NULL, 0)',
-        digest,
-        label,
-        now,
-      );
+      raw = this._insertToken(label, now);
     });
+    return raw;
+  }
+
+  /** True once PAIR_FAILURE_LIMIT wrong codes arrived within the window; cleared by createPairCode(). */
+  pairingLocked() {
+    return this._pairLocked;
+  }
+
+  /** Count one wrong pairing code; returns true when this failure locks pairing. */
+  recordPairFailure() {
+    const now = isoToMs(this._now());
+    this._pairFailures = this._pairFailures.filter((at) => now - at < PAIR_FAILURE_WINDOW_MS);
+    this._pairFailures.push(now);
+    if (!this._pairLocked && this._pairFailures.length >= PAIR_FAILURE_LIMIT) {
+      this._pairLocked = true;
+      this._log.warn(`store: pairing locked after ${PAIR_FAILURE_LIMIT} wrong codes; create a new code to unlock`);
+      return true;
+    }
+    return false;
+  }
+
+  /** A device token issued without a pair code (USB setup), e.g. label `usb:<serial>`. Returns the raw
+   * 64-hex token; only its hash is stored. */
+  issueDeviceToken(label) {
+    return this._insertToken(label, this._now());
+  }
+
+  _insertToken(label, now) {
+    const raw = crypto.randomBytes(32).toString('hex');
+    this._run(
+      'INSERT INTO tokens (sha256, label, created_at, last_used_at, revoked) VALUES (?, ?, ?, NULL, 0)',
+      hashToken(raw),
+      label,
+      now,
+    );
     return raw;
   }
 
@@ -675,18 +724,19 @@ class JobStore {
 
   tokens() {
     return this._all('SELECT id, sha256, label, created_at, last_used_at, revoked FROM tokens ORDER BY id DESC').map(
-      (row) => ({
-        id: Number(row.id),
-        sha256: str(row.sha256),
-        label: String(row.label || ''),
-        createdAt: str(row.created_at),
-        lastUsedAt: row.last_used_at ? String(row.last_used_at) : null,
-        revoked: Boolean(Number(row.revoked)),
-      }),
+      tokenFromRow,
     );
   }
 
-  revokeToken(tokenId) {
+  /** Tokens (revoked ones too) with exactly this label, newest first. */
+  tokensByLabel(label) {
+    return this._all(
+      'SELECT id, sha256, label, created_at, last_used_at, revoked FROM tokens WHERE label = ? ORDER BY id DESC',
+      label,
+    ).map(tokenFromRow);
+  }
+
+  revokeTokenById(tokenId) {
     this._run('UPDATE tokens SET revoked = 1 WHERE id = ?', tokenId);
   }
 

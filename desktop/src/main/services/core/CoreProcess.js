@@ -123,6 +123,11 @@ class CoreProcess {
     return this.sidecar.isRunning(this.name);
   }
 
+  /** Relaunch now a core that failed and is waiting out its restart backoff. */
+  retryNow() {
+    return this.sidecar.retryNow(this.name);
+  }
+
   async stopGracefully({ timeoutMs = 8000 } = {}) {
     this.asrBroker.killAll();
     return this.sidecar.stopGracefully(this.name, {

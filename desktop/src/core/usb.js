@@ -17,7 +17,9 @@ const DEVICES_TIMEOUT_S = 10;
 const LIST_TIMEOUT_S = 30;
 const PULL_TIMEOUT_S = 600;
 // The R1 client falls back to http://127.0.0.1:8765 when it has no validated network;
-// the watcher reverse-forwards that device port to this server for adopted devices.
+// the watcher reverse-forwards that device port to this server's API-only listener for adopted
+// devices, never to the admin listener. index.js hands the watcher the port that listener actually
+// bound (setApiPortSource); a config-only api_port edit never re-points the reverse.
 const DEVICE_LOOPBACK_PORT = 8765;
 const TRACKER_RETRY_S = 5;
 const IDLE_CHECK_S = 30;
@@ -258,7 +260,20 @@ class UsbWatcher {
     this._connected = [];
     this._syncing = null;
     this._lastError = null;
-    this._reversed = new Set();
+    // serial -> port the device's tcp:8765 reverse currently targets.
+    this._reversed = new Map();
+    // () => port the API-only listener bound, or null while none is bound (no reverse then).
+    // Unset (tests, standalone use): the config's api_port.
+    this._apiPortSource = null;
+    // (serial) => any, run when an adopted device is plugged in or first seen after start.
+    this._deviceConnected = null;
+    // Serials adb listed at the previous applied pass, for the connected handler; unlike
+    // _present it starts empty, so a device already plugged in at start counts as arriving.
+    this._seen = new Set();
+    // Reason while USB setup owns the adb transport (no poll, sync or reverse); null otherwise.
+    this._suspended = null;
+    this._busy = 0;
+    this._idleWaiters = [];
     this._lastAdoptedSeen = monotonicSeconds();
     this.poll_now = this.pollNow.bind(this);
     this.poll_once = this.pollOnce.bind(this);
@@ -324,6 +339,63 @@ class UsbWatcher {
     this._put(WAKE);
   }
 
+  /**
+   * Where the tcp:8765 reverse points: `fn()` returns the port the API-only listener bound, or
+   * null while nothing is bound (the watcher then applies no reverse at all).
+   * @param {() => number|null|undefined} fn
+   */
+  setApiPortSource(fn) {
+    this._apiPortSource = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * Call `fn(serial)` whenever an adopted device goes from absent to present (plugged in, or first
+   * seen after start). It runs detached from the poll loop; a throw or rejection is logged.
+   * @param {((serial: string) => any)|null} fn
+   */
+  setDeviceConnectedHandler(fn) {
+    this._deviceConnected = typeof fn === 'function' ? fn : null;
+  }
+
+  /**
+   * Hand the adb transport to another owner (USB setup): no poll, sync or reverse runs until
+   * resume(). Resolves once a device sync already in progress has finished.
+   * @param {string} reason
+   * @returns {Promise<void>}
+   */
+  suspend(reason) {
+    this._suspended = String(reason || 'suspended');
+    this._log.info(`usb: watcher suspended (${this._suspended})`);
+    if (this._busy === 0) return Promise.resolve();
+    return new Promise((resolve) => this._idleWaiters.push(resolve));
+  }
+
+  /** Take the transport back; reverses are re-applied on the next pass, which starts now. */
+  resume() {
+    if (this._suspended === null) return;
+    this._log.info(`usb: watcher resumed (${this._suspended})`);
+    this._suspended = null;
+    // The owner may have rebooted the device or changed its reverses.
+    this._reversed.clear();
+    this._put(WAKE);
+  }
+
+  get suspended() {
+    return this._suspended;
+  }
+
+  _whileBusy(fn) {
+    this._busy += 1;
+    try {
+      return fn();
+    } finally {
+      this._busy -= 1;
+      if (this._busy === 0 && this._idleWaiters.length) {
+        for (const resolve of this._idleWaiters.splice(0)) resolve();
+      }
+    }
+  }
+
   status() {
     const cfg = this._config();
     const adb = UsbWatcher.adbPath(cfg, this._configDir);
@@ -373,6 +445,7 @@ class UsbWatcher {
         this._connected = [];
         this._syncing = null;
         this._present = null;
+        this._seen = new Set();
         if (cfg.usb_enabled) this._setError(`adb not found: ${cfg.adb_cmd}`);
         this._idleCheck(cfg);
         await this._await(TRACKER_RETRY_S);
@@ -492,27 +565,36 @@ class UsbWatcher {
    * @param {object} [cfg]
    */
   pollOnce(cfg) {
-    cfg = cfg || this._config();
-    const adb = UsbWatcher.adbPath(cfg, this._configDir);
-    if (adb === null) {
-      this._setError(`adb not found: ${cfg.adb_cmd}`);
-      this._connected = [];
-      return;
-    }
-    const out = this._run([adb, 'devices', '-l'], { timeout: DEVICES_TIMEOUT_S });
-    this._devices = parseDevices(out).filter((dev) => dev.state === 'device');
-    this._apply(adb, cfg, this._devices);
+    if (this._suspended !== null) return;
+    this._whileBusy(() => {
+      cfg = cfg || this._config();
+      const adb = UsbWatcher.adbPath(cfg, this._configDir);
+      if (adb === null) {
+        this._setError(`adb not found: ${cfg.adb_cmd}`);
+        this._connected = [];
+        return;
+      }
+      const out = this._run([adb, 'devices', '-l'], { timeout: DEVICES_TIMEOUT_S });
+      this._devices = parseDevices(out).filter((dev) => dev.state === 'device');
+      this._apply(adb, cfg, this._devices);
+    });
   }
 
   _apply(adb, cfg, devices) {
+    if (this._suspended !== null) return;
+    this._whileBusy(() => this._applyDevices(adb, cfg, devices));
+  }
+
+  _applyDevices(adb, cfg, devices) {
     const adopted = this.store.adoptedSerials();
     for (const dev of devices) this.store.upsertDeviceSeen(dev.serial, dev.model);
     this._connected = devices.map((dev) => [dev.serial, dev.model, adopted.has(dev.serial)]);
     this._announceArrivals(devices, adopted);
+    this._announceConnected(devices, adopted);
     let failed = false;
     for (const dev of devices) {
       if (!adopted.has(dev.serial)) continue;
-      if (this._stopped) return;
+      if (this._stopped || this._suspended !== null) return;
       this._lastAdoptedSeen = monotonicSeconds();
       try {
         this._ensureReverse(adb, dev.serial, cfg);
@@ -530,7 +612,7 @@ class UsbWatcher {
       }
     }
     const present = new Set(devices.filter((dev) => adopted.has(dev.serial)).map((dev) => dev.serial));
-    this._reversed = new Set([...this._reversed].filter((serial) => present.has(serial)));
+    this._reversed = new Map([...this._reversed].filter(([serial]) => present.has(serial)));
     if (!failed) this._setError(null);
   }
 
@@ -549,6 +631,21 @@ class UsbWatcher {
     }
   }
 
+  _announceConnected(devices, adopted) {
+    const serials = new Set(devices.map((dev) => dev.serial));
+    const previous = this._seen;
+    this._seen = serials;
+    const handler = this._deviceConnected;
+    if (handler === null) return;
+    for (const serial of [...serials].sort()) {
+      if (previous.has(serial) || !adopted.has(serial)) continue;
+      this._log.info(`usb: ${serial} connected`);
+      Promise.resolve()
+        .then(() => handler(serial))
+        .catch((error) => this._warn(`usb: ${serial} connected handler failed: ${error}`, error));
+    }
+  }
+
   /**
    * In `plug` mode, ask the server to exit once nothing has needed it for `idle_exit_min`.
    * @param {object} cfg
@@ -557,6 +654,8 @@ class UsbWatcher {
    */
   _idleCheck(cfg, now) {
     if (cfg.run_mode !== 'plug' || this._requestExit === null) return false;
+    // USB setup owns the device; it may be installing or rebooting, so this is not idle.
+    if (this._suspended !== null) return false;
     const at = now === undefined ? monotonicSeconds() : now;
     if (this._connected.some((row) => row[2])) {
       this._lastAdoptedSeen = at;
@@ -573,19 +672,23 @@ class UsbWatcher {
   }
 
   _ensureReverse(adb, serial, cfg) {
-    if (this._reversed.has(serial)) return;
+    const target = this._apiPortSource ? this._apiPortSource() : cfg.api_port;
+    // Never point the device at a port nobody (or somebody else) may be listening on.
+    if (!Number.isInteger(target) || target < 1 || target > 65535) return;
+    if (this._reversed.get(serial) === target) return;
+    // adb reverse replaces an existing tcp:8765 mapping, so this also re-points an old target.
     this._run(
-      [adb, '-s', serial, 'reverse', `tcp:${DEVICE_LOOPBACK_PORT}`, `tcp:${cfg.listen_port}`],
+      [adb, '-s', serial, 'reverse', `tcp:${DEVICE_LOOPBACK_PORT}`, `tcp:${target}`],
       { timeout: DEVICES_TIMEOUT_S },
     );
-    this._reversed.add(serial);
-    this._log.info(`usb: ${serial} reverse tcp:${DEVICE_LOOPBACK_PORT} -> ${cfg.listen_port}`);
+    this._reversed.set(serial, target);
+    this._log.info(`usb: ${serial} reverse tcp:${DEVICE_LOOPBACK_PORT} -> ${target} (API listener)`);
   }
 
   syncDevice(adb, serial, cfg) {
     const listing = this._list(adb, serial, cfg);
     for (const recordingId of Object.keys(listing).sort()) {
-      if (this._stopped) return;
+      if (this._stopped || this._suspended !== null) return;
       this._syncRecording(adb, serial, recordingId, listing[recordingId], cfg);
     }
   }

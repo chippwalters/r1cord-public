@@ -784,7 +784,7 @@ function registerAdmin(app) {
     if (tokenId === null) {
       return invalid(request, reply, ['path.token_id: Input should be a valid integer, unable to parse string as an integer']);
     }
-    request.server.state.store.revokeToken(tokenId);
+    request.server.state.store.revokeTokenById(tokenId);
     return redirect(reply, '/admin/devices#paired');
   }
 
@@ -930,6 +930,7 @@ function registerAdmin(app) {
     const old = state.config;
     const form = await readForm(request);
     const listenPort = form.int('listen_port', 8765);
+    const apiPort = form.int('api_port', old.api_port);
     const writerTimeout = form.int('writer_timeout_s', 900);
     const pairTtl = form.int('pair_code_ttl_s', 600);
     const usbPoll = form.int('usb_poll_s', 3);
@@ -941,6 +942,7 @@ function registerAdmin(app) {
       server_name: text('server_name') || old.server_name,
       listen_host: text('listen_host') || old.listen_host,
       listen_port: listenPort,
+      api_port: apiPort,
       webdav_folder: text('webdav_folder') || String(old.webdav_folder),
       public_url_base: text('public_url_base').replace(/\/+$/, '') || old.public_url_base,
       theme: text('theme') || old.theme,
@@ -977,6 +979,13 @@ function registerAdmin(app) {
     }
     if (!USB_ACTIONS.includes(changes.usb_auto_action)) changes.usb_auto_action = old.usb_auto_action;
     if (!RUN_MODES.includes(changes.run_mode)) changes.run_mode = old.run_mode;
+    // Tailscale Serve forwards /v1 to the bound API port and is owned by the Setup page; an
+    // api_port move while it is on would leave the page, the config and Serve disagreeing.
+    if (old.tailscale_serve && apiPort !== old.api_port) {
+      return invalid(request, reply, [
+        'api_port cannot change while /v1 is shared on the tailnet: turn off “Share /v1 on the tailnet” on the Setup page first',
+      ]);
+    }
     let newConfig;
     try {
       newConfig = withUpdates(old, changes);
@@ -988,7 +997,12 @@ function registerAdmin(app) {
     if (rotated) newConfig = withUpdates(newConfig, { admin_password: rotated });
     applyConfig(state, newConfig);
     state.usb.pollNow();
-    const restart = newConfig.listen_host !== old.listen_host || newConfig.listen_port !== old.listen_port;
+    // The API listener keeps its bound port (and the USB reverse keeps pointing at it) until restart.
+    const boundApi = state.apiPort == null ? old.api_port : state.apiPort;
+    const restart =
+      newConfig.listen_host !== old.listen_host ||
+      newConfig.listen_port !== old.listen_port ||
+      newConfig.api_port !== boundApi;
     return configPage(request, reply, { saved: true, restartNote: restart, themeChanged: newConfig.theme !== old.theme });
   }
 

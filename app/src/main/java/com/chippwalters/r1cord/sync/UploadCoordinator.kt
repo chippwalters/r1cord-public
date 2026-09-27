@@ -54,17 +54,20 @@ class UploadCoordinator internal constructor(
         require(maxChunk in 1..OffloadClient.MAX_CHUNK) { "Upload chunk size must be between 1 byte and 64 MiB." }
     }
 
-    /** Sends a recording; [reviews] are the AI reviews to write, any subset of REVIEW_KINDS. */
+    /**
+     * Sends a recording; [reviews] are the AI reviews to write, any subset of REVIEW_KINDS.
+     * The job title is the durable Room title read with the serialized export, so it always
+     * matches the Library and metadata.json.
+     */
     suspend fun send(
         recordingId: String,
-        title: String,
         reviews: Collection<String>,
         publish: Boolean,
         onProgress: (UploadProgress) -> Unit,
     ): SendResult {
-        val trimmed = title.trim()
-        require(trimmed.isNotEmpty()) { "Title is required." }
         val bundle = library.exportBundle(recordingId)
+        val title = bundle.title.trim()
+        require(title.isNotEmpty()) { "This recording has no title. Rename it before sending." }
         var createdJob = bundle.jobId != null
         try {
             val files = buildList {
@@ -77,7 +80,7 @@ class UploadCoordinator internal constructor(
                 JobRequest(
                     recordingId = bundle.id,
                     createdAt = bundle.createdAt,
-                    title = trimmed.take(120),
+                    title = title.take(120),
                     reviews = REVIEW_KINDS.filter { it in reviews },
                     publish = publish,
                     files = files.map { FileEntry(it.name, it.size, it.sha256) },
