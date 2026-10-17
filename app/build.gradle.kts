@@ -11,8 +11,8 @@ android {
         applicationId = "com.chippwalters.r1cord"
         minSdk = 33
         targetSdk = 36
-        versionCode = 17
-        versionName = "0.4.0"
+        versionCode = 18
+        versionName = "0.4.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     // Release signing credentials live in ~/.gradle/gradle.properties (never in this repo).

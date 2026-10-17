@@ -22,6 +22,8 @@ import com.chippwalters.r1cord.recording.RecorderSettings
 import com.chippwalters.r1cord.storage.RecordingLibrary
 import com.chippwalters.r1cord.storage.RenameResult
 import com.chippwalters.r1cord.storage.validateTitle
+import com.chippwalters.r1cord.sync.OffloadClient
+import com.chippwalters.r1cord.sync.OffloadException
 import com.chippwalters.r1cord.sync.OffloadSettings
 import com.chippwalters.r1cord.sync.SendResult
 import com.chippwalters.r1cord.sync.deviceBadge
@@ -64,7 +66,12 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             graph.playback.state.collect { player ->
                 mutableState.update { previous ->
-                    previous.copy(playback = player, message = if (player.error != null && player.error != previous.playback.error) player.error else previous.message)
+                    val error = player.error?.takeIf { it != previous.playback.error }
+                    previous.copy(
+                        playback = player,
+                        message = error ?: previous.message,
+                        messageAction = if (error != null) null else previous.messageAction,
+                    )
                 }
             }
         }
@@ -92,7 +99,9 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                     // A start that fails, or a session that ends without a saved file, leaves
                     // the recorder IDLE; the recording screen has no usable control then.
                     if (capture.status == CaptureStatus.IDLE && next.screen == Screen.RECORDING) next = next.copy(screen = Screen.HOME)
-                    if (capture.error != null && capture.error != previous.capture.error) next = next.copy(message = capture.error)
+                    if (capture.error != null && capture.error != previous.capture.error) {
+                        next = next.copy(message = capture.error, messageAction = null)
+                    }
                     next
                 }
             }
@@ -117,13 +126,19 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
 
     fun startStop() {
         if (state.value.upload != null) return
+        if (state.value.finishingInterruptedId != null) {
+            showError(FINISHING_INTERRUPTED_MESSAGE)
+            return
+        }
         val capture = state.value.capture
         when (capture.status) {
             CaptureStatus.IDLE -> {
                 if (!hasPermission(Manifest.permission.RECORD_AUDIO)) { showError("Microphone permission is required. Allow it in Android Settings through maintenance."); return }
                 if (state.value.storageSeconds <= 0) { showError("Storage is full. Copy your recordings to the computer, verify them, then delete local files."); return }
                 graph.playback.stop()
-                mutableState.update { it.copy(screen = Screen.RECORDING, selectedId = null, message = null) }
+                mutableState.update {
+                    it.copy(screen = Screen.RECORDING, selectedId = null, message = null, messageAction = null)
+                }
                 runCatching { graph.recorder.start() }.onFailure { showError(it.message ?: "Could not start recording") }
             }
             CaptureStatus.RECORDING, CaptureStatus.AUTO_LISTENING, CaptureStatus.PAUSED -> graph.recorder.stop()
@@ -202,12 +217,53 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
             finally { withContext(Dispatchers.IO) { file.delete() } }
         }
     }
-    fun showError(message: String) { mutableState.update { it.copy(message = message) } }
-    fun dismissMessage() { graph.recorder.clearError(); mutableState.update { it.copy(message = null) } }
+    fun showError(message: String, action: MessageAction? = null) {
+        mutableState.update { it.copy(message = message, messageAction = action) }
+    }
+    fun dismissMessage() {
+        graph.recorder.clearError()
+        mutableState.update { it.copy(message = null, messageAction = null) }
+    }
+
+    fun finishInterrupted(id: String) {
+        val current = state.value
+        if (current.isCapturing) {
+            showError("Stop recording before finishing this file.")
+            return
+        }
+        if (current.upload != null || current.finishingInterruptedId != null) return
+        val item = current.recordings.firstOrNull { it.id == id }
+        if (item == null) {
+            showError("Recording no longer exists.")
+            return
+        }
+        if (item.status != "INTERRUPTED") {
+            showError("This recording is no longer interrupted.")
+            return
+        }
+        graph.playback.stop()
+        mutableState.update { it.copy(finishingInterruptedId = id) }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { graph.library.finishInterrupted(id) }
+                showError("The audio file passed the container check and is now closed. It can be sent.")
+            } catch (error: Exception) {
+                showError(error.message ?: RecordingLibrary.INCOMPLETE_AUDIO_MESSAGE)
+            } finally {
+                mutableState.update {
+                    if (it.finishingInterruptedId == id) it.copy(finishingInterruptedId = null) else it
+                }
+            }
+        }
+    }
 
     fun openSendSheet(id: String) {
         if (state.value.isCapturing) { showError("Stop recording before sending."); return }
         if (state.value.upload != null) return
+        if (state.value.finishingInterruptedId != null) {
+            showError(FINISHING_INTERRUPTED_MESSAGE)
+            return
+        }
         if (!OffloadSettings.isPaired(getApplication())) {
             showError("Pair with the desktop server in Settings first.")
             return
@@ -262,6 +318,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                     is RenameResult.SavedMetadataFailed -> previous.copy(
                         rename = rename,
                         message = "Title saved; metadata update failed. It will be repaired before the next send.",
+                        messageAction = null,
                     )
                 }
             }
@@ -272,7 +329,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
     private fun renameFailed(id: String, message: String) {
         mutableState.update {
             if (it.rename?.recordingId == id) it.copy(rename = RenameUiState(id, busy = false, error = message))
-            else it.copy(message = message)
+            else it.copy(message = message, messageAction = null)
         }
     }
 
@@ -280,6 +337,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
     fun send(id: String, reviews: Collection<String>, publish: Boolean) {
         if (state.value.isCapturing) { showError("Stop recording before sending."); return }
         if (state.value.upload != null) return
+        if (state.value.finishingInterruptedId != null) { showError(FINISHING_INTERRUPTED_MESSAGE); return }
         if (MaintenanceGate.snapshot().maintenance) { showError(RecordingLibrary.MAINTENANCE_MESSAGE); return }
         closeSendSheet()
         startUpload {
@@ -305,6 +363,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
     fun sendAll() {
         if (state.value.isCapturing) { showError("Stop recording before sending."); return }
         if (state.value.upload != null) return
+        if (state.value.finishingInterruptedId != null) { showError(FINISHING_INTERRUPTED_MESSAGE); return }
         if (MaintenanceGate.snapshot().maintenance) { showError(RecordingLibrary.MAINTENANCE_MESSAGE); return }
         if (!OffloadSettings.isPaired(getApplication())) {
             showError("Pair with the desktop server in Settings first.")
@@ -365,7 +424,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
                     }
                 }
             } catch (e: Exception) {
-                showError(e.message ?: "Could not refresh send status.")
+                showOffloadError(e, "Could not refresh send status.")
             } finally {
                 mutableState.update { it.copy(refreshing = false) }
             }
@@ -418,11 +477,20 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
             } catch (_: CancellationException) {
                 // Job stays on the row so the next Send resumes.
             } catch (e: Exception) {
-                showError(e.message ?: "Could not send recording.")
+                showOffloadError(e, "Could not send recording.")
             } finally {
                 mutableState.update { it.copy(upload = null) }
             }
         }
+    }
+
+    private fun showOffloadError(error: Exception, fallback: String) {
+        val action = if (error is OffloadException && error.code == OffloadClient.TAILSCALE_DISCONNECTED) {
+            MessageAction.OPEN_TAILSCALE
+        } else {
+            null
+        }
+        showError(error.message ?: fallback, action)
     }
 
     private fun notifySent(result: SendResult) {
@@ -465,6 +533,7 @@ class R1cordViewModel(application: Application) : AndroidViewModel(application) 
     companion object {
         private const val OFFLOAD_CHANNEL = "offload"
         private const val OFFLOAD_NOTIFICATION_BASE = 2000
+        private const val FINISHING_INTERRUPTED_MESSAGE = "Wait for the interrupted file check to finish."
     }
 }
 

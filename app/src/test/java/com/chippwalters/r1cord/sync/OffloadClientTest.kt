@@ -418,7 +418,7 @@ class OffloadClientTest {
         val failure = assertFailsWith<OffloadException> {
             runBlocking { client(url = "https://desktop.example.ts.net").createJob(job, "{}") }
         }
-        assertEquals(TAILSCALE_OFF, failure.message)
+        assertEquals(OffloadClient.TAILSCALE_DISCONNECTED, failure.code)
         assertEquals(0, server.requestCount)
     }
 

@@ -115,7 +115,7 @@ Press **START RECORDING**. While recording you see:
 
 The screen dims after about 30 seconds while recording, so it is still readable but not wasting battery. The first touch brightens it and does what you tapped.
 
-If the battery dies or the app is closed mid-recording, whatever was captured is kept and marked **INTERRUPTED**, so you never see a half-recording presented as a good one.
+If the battery dies, microphone access is lost, or the app is closed mid-recording, whatever was captured is kept and marked **INTERRUPTED**, so you never see a half-recording presented as a good one. Open it and press **FINISH**: R1CORD checks the container duration and indexed audio at its start, midpoint and end. If the container is complete, it changes to **SAVED** and **SEND** becomes available. If the file was never finalized, it stays **INTERRUPTED** and remains available to copy; R1CORD does not pretend damaged audio is complete.
 
 ## Settings
 
@@ -126,6 +126,8 @@ Press the **gear** on the home screen. Settings cannot be opened while a recordi
 **Wi-Fi** — switches the R1's Wi-Fi radio on and off. The switch always shows what the radio is really doing (*Turning on…*, *Turning off…*), and it refuses to turn Wi-Fi off while an upload is running — wait for the upload to finish. It works through R1CORD controls; without that helper, the switch explains why it cannot act and you use **Wi-Fi networks** instead.
 
 **Wi-Fi networks** — opens Android's Wi-Fi panel, where you pick or join a network (and can turn Wi-Fi on or off too). Back returns to R1CORD.
+
+**Open Tailscale** — opens Tailscale on the R1 so you can reconnect its VPN. R1CORD also offers this button directly when SEND or REFRESH finds that Tailscale is not connected.
 
 **Noise cancelling** — reduces steady background noise (fans, traffic hum) while recording. Off by default. How much it helps depends on the conditions.
 
@@ -427,11 +429,11 @@ Nothing leaves the R1 unless you send it or copy it. R1CORD has no cloud account
 |---|---|
 | "No speech was captured" | Voice pausing was on and it never heard speech, so nothing was saved. Set sensitivity to **Quiet**, or turn voice pausing off. |
 | Recording will not start | Storage is nearly full. Copy recordings to a computer, then delete them in the app. With an older R1CORD (0.3.3 or earlier), "Recording failed: Volume external_primary not found" after a restart means the app started before the device's storage was ready: install 0.3.4 or later, which recovers by itself. |
-| A recording says INTERRUPTED | It was cut short — battery, or the app closing. Whatever was captured is still there. |
+| A recording says INTERRUPTED | It ended unexpectedly. Open it and press **FINISH**. R1CORD checks the container duration and indexed audio at its start, midpoint and end; a complete file becomes **SAVED** and can be sent. An incomplete file stays **INTERRUPTED**—copy it before deleting it. |
 | "Stop recording before opening settings." | Press STOP first. Settings, renaming, sending and power off all wait for the recording to finish. |
 | "Device maintenance in progress. Try again shortly." | R1CORD Desktop is setting up or updating the R1 over the cable. Wait for it to finish (the Setup or Updates page shows progress), then try again. |
 | "No internet. Turn Wi-Fi on, or plug into the desktop with USB mode on." | Sending found no connection. Turn on the **Wi-Fi** switch in Settings (use **Wi-Fi networks** to join a network), or plug into the computer running the desktop server — the cable works with Wi-Fi off. |
-| "Tailscale is off on this R1…" | Your Server URL is a Tailscale address, but Tailscale on the R1 is not connected — usually because Wi-Fi is off. Turn Wi-Fi on in Settings, or plug into the desktop. If it persists with Wi-Fi on, run **Set up R1** on the desktop's Setup page again. |
+| "Tailscale isn't connected on this R1…" | Your Server URL is a Tailscale address, but Tailscale on the R1 is not connected. Turn Wi-Fi on, then press **OPEN TAILSCALE** in the message (or Settings → **Open Tailscale**) and connect it. You can instead plug into the desktop and use USB mode. If Tailscale will not connect, run **Set up R1** on the desktop's Setup page again. |
 | "Desktop server is not reachable (HTTP 530)…" or "…not reachable at *your server*…" | The R1 has a connection but nothing answered at your Server URL: the PC is off or asleep, the companion is not running, or the route to it is down — Tailscale on the PC (check the Setup page shows *Connected* and `/v1` shared) or your own tunnel. Start them and send again — the upload picks up where it stopped. |
 | "Pair with the desktop server in Settings first." | The R1 has not been paired yet. Settings → Desktop server → Pair, using the code your server shows. |
 | "Not paired or token revoked. Pair again in Settings." | The server no longer recognises this R1. Pair again, or run **Set up R1** on the desktop's Setup page. |

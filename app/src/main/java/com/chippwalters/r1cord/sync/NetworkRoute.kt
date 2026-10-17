@@ -21,12 +21,11 @@ enum class Route { CONFIGURED, USB }
 
 sealed interface RouteDecision {
     data class Use(val route: Route) : RouteDecision
-    data class Unavailable(val message: String) : RouteDecision
+    data class Unavailable(val message: String, val code: String? = null) : RouteDecision
 }
 
 const val TAILSCALE_OFF =
-    "Tailscale is off on this R1. Turn Wi-Fi on, or plug into the desktop with USB mode on."
-
+    "Tailscale isn't connected on this R1. Open Tailscale to connect, or plug into the desktop with USB mode on."
 /**
  * Picks the server for the next request. A blank URL means USB-only use. A `*.ts.net` server is
  * only reachable through the Tailscale VPN, and a VPN being up says nothing about the PC: when
@@ -44,7 +43,8 @@ fun chooseRoute(
     if (url.isBlank()) return RouteDecision.Use(Route.USB)
     if (isTailnetUrl(url)) {
         return when {
-            !net.vpnUp -> if (usbReachable()) RouteDecision.Use(Route.USB) else RouteDecision.Unavailable(TAILSCALE_OFF)
+            !net.vpnUp -> if (usbReachable()) RouteDecision.Use(Route.USB)
+            else RouteDecision.Unavailable(TAILSCALE_OFF, OffloadClient.TAILSCALE_DISCONNECTED)
             !usbReachable() || configuredReachable() -> RouteDecision.Use(Route.CONFIGURED)
             else -> RouteDecision.Use(Route.USB)
         }

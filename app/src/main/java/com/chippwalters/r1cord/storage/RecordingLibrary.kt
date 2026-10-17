@@ -8,6 +8,8 @@ import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
 import android.media.MediaMetadataRetriever
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
 import android.os.Environment
 import android.os.Handler
@@ -21,10 +23,12 @@ import com.chippwalters.r1cord.model.PublishedPage
 import com.chippwalters.r1cord.model.RecordingItem
 import java.io.File
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -40,7 +44,80 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-class RecordingLibrary(context: Context) {
+fun interface FinalizedAudioValidator {
+    /** Returns the checked container duration in milliseconds, or throws when it is incomplete. */
+    fun validate(uri: Uri): Long
+}
+
+private class AndroidFinalizedAudioValidator(context: Context) : FinalizedAudioValidator {
+    private val context = context.applicationContext
+
+    override fun validate(uri: Uri): Long {
+        try {
+            val durationMs = MediaMetadataRetriever().let { retriever ->
+                try {
+                    retriever.setDataSource(context, uri)
+                    retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+                } finally {
+                    retriever.release()
+                }
+            }
+            check(durationMs > 0)
+
+            val extractor = MediaExtractor()
+            try {
+                extractor.setDataSource(context, uri, null)
+                val track = (0 until extractor.trackCount).firstOrNull { index ->
+                    extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+                } ?: error("No audio track")
+                val format = extractor.getTrackFormat(track)
+                val trackDurationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                    format.getLong(MediaFormat.KEY_DURATION)
+                } else {
+                    durationMs * 1_000L
+                }
+                check(trackDurationUs > 0)
+                val toleranceUs = maxOf(5_000_000L, trackDurationUs / 100L)
+                check(abs(trackDurationUs - durationMs * 1_000L) <= toleranceUs)
+
+                extractor.selectTrack(track)
+                val bufferSize = if (format.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
+                    format.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
+                } else {
+                    DEFAULT_SAMPLE_BUFFER
+                }.coerceIn(MIN_SAMPLE_BUFFER, MAX_SAMPLE_BUFFER)
+                val buffer = ByteBuffer.allocateDirect(bufferSize)
+                fun sampleAt(positionUs: Long): Long {
+                    extractor.seekTo(positionUs.coerceAtLeast(0L), MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+                    val sampleTimeUs = extractor.sampleTime
+                    check(sampleTimeUs >= 0L)
+                    buffer.clear()
+                    check(extractor.readSampleData(buffer, 0) > 0)
+                    return sampleTimeUs
+                }
+                check(sampleAt(0L) <= toleranceUs)
+                check(abs(sampleAt(trackDurationUs / 2L) - trackDurationUs / 2L) <= toleranceUs)
+                check(sampleAt(trackDurationUs - 1_000_000L) + toleranceUs >= trackDurationUs)
+            } finally {
+                extractor.release()
+            }
+            return durationMs
+        } catch (error: Exception) {
+            throw IllegalStateException(RecordingLibrary.INCOMPLETE_AUDIO_MESSAGE, error)
+        }
+    }
+
+    private companion object {
+        const val MIN_SAMPLE_BUFFER = 64 * 1024
+        const val DEFAULT_SAMPLE_BUFFER = 256 * 1024
+        const val MAX_SAMPLE_BUFFER = 1024 * 1024
+    }
+}
+
+class RecordingLibrary(
+    context: Context,
+    private val finalizedAudioValidator: FinalizedAudioValidator = AndroidFinalizedAudioValidator(context),
+) {
     private val context = context.applicationContext
     private val resolver = context.contentResolver
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -187,6 +264,31 @@ class RecordingLibrary(context: Context) {
                 runCatching { writeMetadata(id, "INTERRUPTED", error.message) }
                 false
             } finally { active.remove(id) }
+        }
+    }
+
+    /**
+     * Checks the interrupted container's duration and indexed audio at its start, midpoint and
+     * end. A complete container is published under its normal name and becomes sendable;
+     * incomplete media stays interrupted.
+     */
+    suspend fun finishInterrupted(id: String): Long = withContext(Dispatchers.IO) {
+        ensureRecovered()
+        libraryWrite {
+            lock.withLock {
+                check(id !in active) { "Stop recording before finishing this file." }
+                val row = dao.recording(id) ?: error("Recording no longer exists.")
+                check(row.status == "INTERRUPTED") { "This recording is no longer interrupted." }
+                check(row.audioUri.isNotEmpty()) { "This interrupted recording has no audio file." }
+
+                val duration = finalizedAudioValidator.validate(Uri.parse(row.audioUri))
+                check(duration > 0L) { INCOMPLETE_AUDIO_MESSAGE }
+                dao.progress(id, duration, row.waveform)
+                publish(Uri.parse(row.audioUri), audioName(row.audioUri, complete = true))
+                writeMetadata(id, status = "SAVED", error = null, clearError = true)
+                dao.status(id, "SAVED", error = null)
+                duration
+            }
         }
     }
 
@@ -410,9 +512,14 @@ class RecordingLibrary(context: Context) {
         }
     }
 
-    private suspend fun writeMetadata(id: String, status: String? = null, error: String? = null) {
+    private suspend fun writeMetadata(
+        id: String,
+        status: String? = null,
+        error: String? = null,
+        clearError: Boolean = false,
+    ) {
         val row = dao.recording(id) ?: return
-        val payload = buildMetadataPayload(row, dao.photos(id), audioExtension(row.audioUri), status, error)
+        val payload = buildMetadataPayload(row, dao.photos(id), audioExtension(row.audioUri), status, error, clearError)
         val bytes = payload.toString(2).toByteArray(Charsets.UTF_8)
         // Reuse the journaled URI so Android never silently creates metadata (1).json.
         val uri = if (row.metadataUri.isNotEmpty() && exists(row.metadataUri)) Uri.parse(row.metadataUri) else {
@@ -512,6 +619,8 @@ class RecordingLibrary(context: Context) {
     companion object {
         const val RESERVE_BYTES = 64L * 1024 * 1024
         internal const val MAINTENANCE_MESSAGE = "Device maintenance in progress. Try again shortly."
+        internal const val INCOMPLETE_AUDIO_MESSAGE =
+            "This audio file is incomplete and cannot be finished on the R1. Copy it before deleting it."
         private const val STOP_MARGIN_BYTES = 2L * 1024 * 1024
         private const val PHOTO_MARGIN_BYTES = 16L * 1024 * 1024
         internal const val AAC_EXTENSION = "m4a"
@@ -590,6 +699,7 @@ internal fun buildMetadataPayload(
     extension: String,
     status: String? = null,
     error: String? = null,
+    clearError: Boolean = false,
 ): JSONObject {
     val photoList = JSONArray()
     photos.forEach { photo ->
@@ -598,6 +708,7 @@ internal fun buildMetadataPayload(
     }
     val state = status ?: row.status
     val wav = extension == RecordingLibrary.WAV_EXTENSION
+    val payloadError = if (clearError) null else error ?: row.error
     return JSONObject().put("schemaVersion", 1).put("id", row.id).put("title", row.title)
         .put("createdAt", row.createdAt).put("durationMs", row.durationMs).put("status", state)
         .put("audio", audioFileFor(state, extension))
@@ -605,7 +716,7 @@ internal fun buildMetadataPayload(
         .put("sampleRate", 48000).put("channels", 1)
         .put("bitrate", if (wav) RecordingLibrary.WAV_BIT_RATE else RecordingLibrary.AAC_BIT_RATE)
         .put("waveform", JSONArray(row.waveform)).put("photos", photoList)
-        .put("error", error ?: row.error ?: JSONObject.NULL)
+        .put("error", payloadError ?: JSONObject.NULL)
 }
 
 /**

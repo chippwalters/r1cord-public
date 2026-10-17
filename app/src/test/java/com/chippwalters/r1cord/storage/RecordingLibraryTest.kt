@@ -223,6 +223,51 @@ class RecordingLibraryTest {
     }
 
     @Test
+    fun finishInterruptedChecksAndPromotesACompleteContainerForSending() = runBlocking<Unit> {
+        library = RecordingLibrary(context, FinalizedAudioValidator { 7_654L })
+        val target = library.begin(wav = false)
+        library.finish(target.id, 5_000L, listOf(0.5f), "Microphone access was interrupted.")
+        awaitItems { list -> list.any { it.id == target.id && it.status == "INTERRUPTED" } }
+        assertTrue(mediaFiles(target.id).containsKey("audio.interrupted.m4a"))
+
+        assertEquals(7_654L, library.finishInterrupted(target.id))
+
+        val item = awaitItems { list ->
+            list.any { it.id == target.id && it.status == "SAVED" && it.durationMs == 7_654L }
+        }.first { it.id == target.id }
+        assertEquals("SAVED", item.status)
+        assertTrue(mediaFiles(target.id).containsKey("audio.m4a"))
+        assertFalse(mediaFiles(target.id).containsKey("audio.interrupted.m4a"))
+        val metadata = readMetadata(target.id)
+        assertEquals("SAVED", metadata.getString("status"))
+        assertEquals("audio.m4a", metadata.getString("audio"))
+        assertTrue("successful recovery clears the interruption error", metadata.isNull("error"))
+        assertEquals(target.id, library.exportBundle(target.id).id)
+        tearDown(target.id)
+    }
+
+    @Test
+    fun finishInterruptedKeepsAnIncompleteContainerInterrupted() = runBlocking<Unit> {
+        library = RecordingLibrary(context, FinalizedAudioValidator {
+            throw IllegalStateException(RecordingLibrary.INCOMPLETE_AUDIO_MESSAGE)
+        })
+        val target = library.begin(wav = false)
+        library.finish(target.id, 5_000L, listOf(0.5f), "Recording process stopped.")
+
+        expectRefused(RecordingLibrary.INCOMPLETE_AUDIO_MESSAGE) {
+            library.finishInterrupted(target.id)
+        }
+
+        assertEquals("INTERRUPTED", recording(target.id).status)
+        assertTrue(mediaFiles(target.id).containsKey("audio.interrupted.m4a"))
+        assertFalse(mediaFiles(target.id).containsKey("audio.m4a"))
+        val metadata = readMetadata(target.id)
+        assertEquals("INTERRUPTED", metadata.getString("status"))
+        assertTrue("the original interruption remains recorded", !metadata.isNull("error"))
+        tearDown(target.id)
+    }
+
+    @Test
     fun deleteRecordingRemovesTheRowAndItsEmptyFolder() = runBlocking<Unit> {
         val target = library.begin(wav = false)
         library.finish(target.id, 100, emptyList(), "teardown")

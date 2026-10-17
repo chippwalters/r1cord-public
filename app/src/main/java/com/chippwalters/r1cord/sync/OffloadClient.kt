@@ -342,7 +342,7 @@ class OffloadClient internal constructor(
         }
         return when (val decision = routes.choose(configured)) {
             is RouteDecision.Use -> Pinned(decision.route, configured)
-            is RouteDecision.Unavailable -> throw OffloadException(decision.message)
+            is RouteDecision.Unavailable -> throw OffloadException(decision.message, code = decision.code)
         }
     }
 
@@ -436,6 +436,7 @@ class OffloadClient internal constructor(
     companion object {
         const val MAX_CHUNK = 64L * 1024 * 1024
         const val SERVER_UNREACHABLE = "server_unreachable"
+        const val TAILSCALE_DISCONNECTED = "tailscale_disconnected"
         /** A job's pinned route or server went away mid-upload; a new Send re-decides the route. */
         const val ROUTE_CHANGED = "route_changed"
         private const val USB_URL = "http://$USB_HOST:$USB_PORT"
