@@ -36,7 +36,7 @@ class NetworkRouteTest {
         assertEquals(configured, choose(tailnet, net(vpnUp = true, internet = false), usbUp = false))
         assertEquals(usb, choose(tailnet, net(vpnUp = false, internet = true), usbUp = true))
         assertEquals(
-            RouteDecision.Unavailable(TAILSCALE_OFF, OffloadClient.TAILSCALE_DISCONNECTED),
+            RouteDecision.Unavailable(TAILSCALE_OFF),
             choose(tailnet, net(vpnUp = false, internet = true), usbUp = false),
         )
     }

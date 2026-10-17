@@ -83,7 +83,6 @@ data class RenameUiState(
     val busy: Boolean = false,
     val error: String? = null,
 )
-enum class MessageAction { OPEN_TAILSCALE }
 data class AppUiState(
     val screen: Screen = Screen.HOME,
     val capture: CaptureState = CaptureState(),
@@ -96,13 +95,10 @@ data class AppUiState(
     val volume: Int = 1,
     val volumeMax: Int = 15,
     val message: String? = null,
-    val messageAction: MessageAction? = null,
     val sendSheetFor: String? = null,
     val upload: UploadUiState? = null,
     val sendResult: SendResultUi? = null,
     val refreshing: Boolean = false,
-    /** Interrupted recording currently being checked and promoted to Saved. */
-    val finishingInterruptedId: String? = null,
     val pairing: PairingUiState? = null,
     val paired: Boolean = false,
     val serverName: String = "",

@@ -82,17 +82,13 @@ class MainActivity : ComponentActivity() {
         }
         hideSystemBars()
         setContent {
-            R1cordUi(
-                model = model,
-                onSettings = {
-                    if (model.state.value.isCapturing) model.showError("Stop recording before opening settings.")
-                    else {
-                        (application as R1cordApplication).playback.stop()
-                        settingsOpen = true
-                    }
-                },
-                onOpenTailscale = { launchTailscale()?.let(model::showError) },
-            )
+            R1cordUi(model = model, onSettings = {
+                if (model.state.value.isCapturing) model.showError("Stop recording before opening settings.")
+                else {
+                    (application as R1cordApplication).playback.stop()
+                    settingsOpen = true
+                }
+            })
             BackHandler(enabled = !settingsOpen) { model.back() }
             if (settingsOpen) RecorderSettingsDialog()
         }
@@ -292,10 +288,6 @@ class MainActivity : ComponentActivity() {
                         if (wifiNote != null) Text(wifiNote!!, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error)
                         Button(onClick = { openWifiNetworks() }, modifier = Modifier.fillMaxWidth()) { Text("Wi-Fi networks") }
-                        Button(
-                            onClick = { error = launchTailscale() },
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Open Tailscale") }
                         var noiseCancel by remember { mutableStateOf(RecorderSettings.noiseCancellation(this@MainActivity)) }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("Noise cancelling", style = MaterialTheme.typography.titleMedium,
@@ -468,21 +460,6 @@ class MainActivity : ComponentActivity() {
     private fun localWifiState(): Int =
         runCatching { getSystemService(WifiManager::class.java)?.wifiState }.getOrNull() ?: WifiManager.WIFI_STATE_UNKNOWN
 
-    /**
-     * Opens the installed Tailscale UI so the owner can reconnect its VPN without leaving the
-     * R1CORD HOME launcher. Package visibility is declared in the manifest.
-     */
-    private fun launchTailscale(): String? {
-        val launch = packageManager.getLaunchIntentForPackage(TAILSCALE_PACKAGE)
-            ?: return "Tailscale is not installed. Use R1CORD Desktop → Setup → Set up R1."
-        return try {
-            startActivity(launch)
-            null
-        } catch (error: Exception) {
-            error.message ?: "Android could not open Tailscale."
-        }
-    }
-
     private fun uploadActive(): Boolean =
         (MaintenanceGate.state.value.active[MaintenanceGate.Work.UPLOAD] ?: 0) > 0
 
@@ -509,6 +486,5 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_PAGE_URL = "com.chippwalters.r1cord.extra.PAGE_URL"
-        private const val TAILSCALE_PACKAGE = "com.tailscale.ipn"
     }
 }

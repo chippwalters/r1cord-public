@@ -107,7 +107,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.chippwalters.r1cord.camera.CameraScreen
 import com.chippwalters.r1cord.model.AppUiState
 import com.chippwalters.r1cord.model.CaptureStatus
-import com.chippwalters.r1cord.model.MessageAction
 import com.chippwalters.r1cord.model.PhotoItem
 import com.chippwalters.r1cord.model.REVIEW_KINDS
 import com.chippwalters.r1cord.model.RecordingItem
@@ -132,7 +131,7 @@ private val Wordmark = buildAnnotatedString {
 private val Shape = RoundedCornerShape(18.dp)
 
 @Composable
-fun R1cordUi(model: R1cordViewModel, onSettings: () -> Unit, onOpenTailscale: () -> Unit) {
+fun R1cordUi(model: R1cordViewModel, onSettings: () -> Unit) {
     val state by model.state.collectAsStateWithLifecycle()
     MaterialTheme(colorScheme = RecorderColors, typography = RecorderTypography) {
         Surface(modifier = Modifier.fillMaxSize(), color = Ink) {
@@ -145,29 +144,15 @@ fun R1cordUi(model: R1cordViewModel, onSettings: () -> Unit, onOpenTailscale: ()
                 Screen.VIEWER -> state.viewerUrl?.let { url -> SummaryViewer(url, model) }
             }
             state.message?.let { message ->
-                val opensTailscale = state.messageAction == MessageAction.OPEN_TAILSCALE
                 AlertDialog(
                     onDismissRequest = model::dismissMessage,
                     title = { Text("R1CORD") },
                     text = { Text(message) },
                     confirmButton = {
-                        TextButton(
-                            onClick = {
-                                model.dismissMessage()
-                                if (opensTailscale) onOpenTailscale()
-                            },
-                            modifier = control(if (opensTailscale) "Open Tailscale" else "Dismiss message"),
-                        ) {
-                            Text(if (opensTailscale) "OPEN TAILSCALE" else "OK")
+                        TextButton(onClick = model::dismissMessage, modifier = control("Dismiss message")) {
+                            Text("OK")
                         }
                     },
-                    dismissButton = if (opensTailscale) {
-                        {
-                            TextButton(onClick = model::dismissMessage, modifier = control("Cancel")) {
-                                Text("CANCEL")
-                            }
-                        }
-                    } else null,
                 )
             }
             state.sendSheetFor?.let { id ->
@@ -355,13 +340,12 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
     val position = if (playback.recordingId == item.id) playback.positionMs.coerceIn(0, duration.coerceAtLeast(0)) else 0L
     val playing = playback.recordingId == item.id && playback.isPlaying
     var dragging by remember(item.id) { mutableStateOf<Float?>(null) }
-    val finishingInterrupted = state.finishingInterruptedId == item.id
-    val canPlay = item.audioUri.isNotBlank() && duration > 0 && !state.isCapturing && !finishingInterrupted
+    val canPlay = item.audioUri.isNotBlank() && duration > 0 && !state.isCapturing
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Header("RECORDING DETAIL", state.batteryPercent, state.isCharging)
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             RecordingTitleRow(item, TitleRowStyle.DETAIL, Modifier.fillMaxWidth()) {
-                IconButton(onClick = { model.openRename(item.id) }, enabled = !state.isCapturing && !finishingInterrupted,
+                IconButton(onClick = { model.openRename(item.id) }, enabled = !state.isCapturing,
                     modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Default.Edit, contentDescription = "Rename recording")
                 }
@@ -369,13 +353,6 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(dateLabel(item.createdAt), color = Muted, fontFamily = RecorderLabelFace, fontSize = 17.sp)
                 SavedStatus(item.status)
-            }
-            if (item.status == "INTERRUPTED") {
-                Text(
-                    "This recording ended unexpectedly. FINISH checks the audio container before making it sendable.",
-                    color = Orange,
-                    fontSize = 17.sp,
-                )
             }
             Surface(shape = Shape, color = Panel) {
                 Column(Modifier.fillMaxWidth().padding(12.dp)) {
@@ -428,7 +405,7 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
                 Text("Tap a photo to enlarge or delete it.", color = Muted, fontSize = 17.sp)
             }
             ActionButton("ADD PHOTO", "Add photo to recording", Icons.Default.AddAPhoto,
-                model::openCamera, Modifier.fillMaxWidth(), enabled = !state.capture.isBusy() && !finishingInterrupted)
+                model::openCamera, Modifier.fillMaxWidth(), enabled = !state.capture.isBusy())
             Text("Files: Download/R1CORD/${item.id}",
                 color = Muted, fontSize = 17.sp)
             if (deviceBadge(item.jobStatus) != "local") {
@@ -447,25 +424,12 @@ private fun DetailScreen(state: AppUiState, model: R1cordViewModel) {
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (item.status == "INTERRUPTED") {
-                ActionButton(
-                    if (finishingInterrupted) "CHECKING" else "FINISH",
-                    "Check and finish interrupted recording",
-                    Icons.Default.Check,
-                    { model.finishInterrupted(item.id) },
-                    Modifier.weight(1f),
-                    stacked = true,
-                    enabled = !state.isCapturing && state.upload == null && !finishingInterrupted,
-                )
-            } else {
-                ActionButton("SEND", "Send recording to desktop", Icons.Default.CloudUpload,
-                    { model.openSendSheet(item.id) }, Modifier.weight(1f), stacked = true,
-                    enabled = !state.isCapturing && item.status == "SAVED" && state.upload == null)
-            }
+            ActionButton("SEND", "Send recording to desktop", Icons.Default.CloudUpload,
+                { model.openSendSheet(item.id) }, Modifier.weight(1f), stacked = true,
+                enabled = !state.isCapturing && item.status == "SAVED" && state.upload == null)
             ActionButton("DELETE", "Delete recording", Icons.Default.DeleteOutline, { confirmDelete = true },
-                Modifier.weight(1f), stacked = true, enabled = !state.isCapturing && !finishingInterrupted)
-            ActionButton("DONE", "Done", Icons.Default.Check, model::back, Modifier.weight(1f),
-                primary = true, stacked = true, enabled = !finishingInterrupted)
+                Modifier.weight(1f), stacked = true, enabled = !state.isCapturing)
+            ActionButton("DONE", "Done", Icons.Default.Check, model::back, Modifier.weight(1f), primary = true, stacked = true)
         }
     }
     if (confirmDelete) {

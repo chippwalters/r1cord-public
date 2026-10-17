@@ -4,20 +4,6 @@ Versions are the app's `versionName`; the desktop companion carries its own vers
 in `desktop/package.json`), as does the device-controls helper R1CORD controls (since 0.4.0, in
 `device-controls/build.gradle.kts`); each is noted where it changed.
 
-## 0.4.1 (unreleased) — Open Tailscale, finish an interrupted recording
-
-Source only for now: the APK on the download site is still 0.4.0. R1CORD Desktop and
-R1CORD controls are unchanged.
-
-- **Open Tailscale from R1CORD.** Settings has an **Open Tailscale** button. When SEND or
-  REFRESH finds the R1's Tailscale VPN disconnected, the error dialog offers **OPEN TAILSCALE**
-  directly — R1CORD is the R1's home screen, so there was no other way to reach the Tailscale app.
-- **FINISH an interrupted recording.** Detail shows **FINISH** for an item marked INTERRUPTED.
-  R1CORD checks the audio container's duration and indexed audio at its start, midpoint and end;
-  a complete file is renamed from `audio.interrupted.*` to `audio.*`, its `metadata.json` becomes
-  `SAVED`, and it can be sent. A truncated or unfinished file stays INTERRUPTED with its original
-  files, so it can still be copied off.
-
 ## 0.4.0 (beta) — Wi-Fi switch, direct power off, rename, thumbnails, new Send panel (R1CORD controls 1.0.0)
 
 - **Wi-Fi switch in Settings.** A live **Wi-Fi** on/off switch, plus a **Wi-Fi networks** button
